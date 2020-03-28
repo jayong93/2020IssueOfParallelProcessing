@@ -50,31 +50,31 @@ public:
 	~LFNODE()
 	{
 	}
-	LFNODE *GetNext()
+	LFNODE* GetNext()
 	{
-		return reinterpret_cast<LFNODE *>(next & 0xFFFFFFFE);
+		return reinterpret_cast<LFNODE*>(next & 0xFFFFFFFE);
 	}
 
-	void SetNext(LFNODE *ptr)
+	void SetNext(LFNODE* ptr)
 	{
 		next = reinterpret_cast<unsigned>(ptr);
 	}
 
-	LFNODE *GetNextWithMark(bool *mark)
+	LFNODE* GetNextWithMark(bool* mark)
 	{
 		int temp = next;
 		*mark = (temp % 2) == 1;
-		return reinterpret_cast<LFNODE *>(temp & 0xFFFFFFFE);
+		return reinterpret_cast<LFNODE*>(temp & 0xFFFFFFFE);
 	}
 
 	bool CAS(int old_value, int new_value)
 	{
 		return atomic_compare_exchange_strong(
-			reinterpret_cast<atomic_int *>(&next),
+			reinterpret_cast<atomic_int*>(&next),
 			&old_value, new_value);
 	}
 
-	bool CAS(LFNODE *old_next, LFNODE *new_next, bool old_mark, bool new_mark)
+	bool CAS(LFNODE* old_next, LFNODE* new_next, bool old_mark, bool new_mark)
 	{
 		unsigned old_value = reinterpret_cast<unsigned>(old_next);
 		if (old_mark)
@@ -89,7 +89,7 @@ public:
 		return CAS(old_value, new_value);
 	}
 
-	bool TryMark(LFNODE *ptr)
+	bool TryMark(LFNODE* ptr)
 	{
 		unsigned old_value = reinterpret_cast<unsigned>(ptr) & 0xFFFFFFFE;
 		unsigned new_value = old_value | 1;
@@ -104,59 +104,59 @@ public:
 
 struct EpochNode
 {
-	LFNODE *ptr;
+	LFNODE* ptr;
 	unsigned long long epoch;
 
-	EpochNode(LFNODE *ptr, unsigned long long epoch) : ptr{ptr}, epoch{epoch} {}
+	EpochNode(LFNODE* ptr, unsigned long long epoch) : ptr{ ptr }, epoch{ epoch } {}
 };
 
 atomic_ullong g_epoch;
-atomic_ullong *t_epochs[MAX_THREAD];
+atomic_ullong* t_epochs[MAX_THREAD];
 thread_local vector<EpochNode> retired_list;
 thread_local unsigned tid;
 thread_local unsigned counter;
 constexpr unsigned epoch_freq = 20;
 
-void retire(LFNODE *node)
+void retire(LFNODE* node)
 {
-	retired_list.emplace_back(node, g_epoch.load());
+	retired_list.emplace_back(node, g_epoch.load(memory_order_relaxed));
 	++counter;
 	if (counter % epoch_freq == 0)
 	{
-		g_epoch.fetch_add(1);
+		g_epoch.fetch_add(1, memory_order_relaxed);
 	}
 	if (retired_list.size() > MAX_THREAD)
 	{
 		auto min_epoch = ULLONG_MAX;
-		for (auto &epoch : t_epochs)
+		for (auto& epoch : t_epochs)
 		{
-			auto e = epoch->load();
+			auto e = epoch->load(memory_order_relaxed);
 			if (min_epoch > e)
 			{
 				min_epoch = e;
 			}
 		}
 
-		auto removed_it = remove_if(retired_list.begin(), retired_list.end(), [min_epoch](auto &r_node) {
+		auto removed_it = remove_if(retired_list.begin(), retired_list.end(), [min_epoch](auto& r_node) {
 			if (r_node.epoch < min_epoch)
 			{
 				delete r_node.ptr;
 				return true;
 			}
 			return false;
-		});
+			});
 		retired_list.erase(removed_it, retired_list.end());
 	}
 }
 
 void start_op()
 {
-	t_epochs[tid]->store(g_epoch.load());
+	t_epochs[tid]->store(g_epoch.load(memory_order_relaxed), memory_order_relaxed);
 }
 
 void end_op()
 {
-	t_epochs[tid]->store(ULLONG_MAX);
+	t_epochs[tid]->store(ULLONG_MAX, memory_order_relaxed);
 }
 
 class LFSET
@@ -174,7 +174,7 @@ public:
 	{
 		while (head.GetNext() != &tail)
 		{
-			LFNODE *temp = head.GetNext();
+			LFNODE* temp = head.GetNext();
 			head.next = temp->next;
 			delete temp;
 		}
@@ -182,7 +182,7 @@ public:
 
 	void Dump()
 	{
-		LFNODE *ptr = head.GetNext();
+		LFNODE* ptr = head.GetNext();
 		cout << "Result Contains : ";
 		for (int i = 0; i < 20; ++i)
 		{
@@ -194,16 +194,16 @@ public:
 		cout << endl;
 	}
 
-	void Find(int x, LFNODE **pred, LFNODE **curr)
+	void Find(int x, LFNODE** pred, LFNODE** curr)
 	{
 		start_op();
 	retry:
-		LFNODE *pr = &head;
-		LFNODE *cu = pr->GetNext();
+		LFNODE* pr = &head;
+		LFNODE* cu = pr->GetNext();
 		while (true)
 		{
 			bool removed;
-			LFNODE *su = cu->GetNextWithMark(&removed);
+			LFNODE* su = cu->GetNextWithMark(&removed);
 			while (true == removed)
 			{
 				if (false == pr->CAS(cu, su, false, false))
@@ -224,7 +224,7 @@ public:
 	}
 	bool Add(int x)
 	{
-		LFNODE *pred, *curr;
+		LFNODE* pred, * curr;
 		while (true)
 		{
 			Find(x, &pred, &curr);
@@ -236,7 +236,7 @@ public:
 			}
 			else
 			{
-				LFNODE *e = new LFNODE(x);
+				LFNODE* e = new LFNODE(x);
 				e->SetNext(curr);
 				if (false == pred->CAS(curr, e, false, false))
 				{
@@ -250,7 +250,7 @@ public:
 	}
 	bool Remove(int x)
 	{
-		LFNODE *pred, *curr;
+		LFNODE* pred, * curr;
 		while (true)
 		{
 			Find(x, &pred, &curr);
@@ -262,7 +262,7 @@ public:
 			}
 			else
 			{
-				LFNODE *succ = curr->GetNext();
+				LFNODE* succ = curr->GetNext();
 				if (false == curr->TryMark(succ))
 				{
 					end_op();
@@ -281,7 +281,7 @@ public:
 	bool Contains(int x)
 	{
 		start_op();
-		LFNODE *curr = &head;
+		LFNODE* curr = &head;
 		while (curr->key < x)
 		{
 			curr = curr->GetNext();
@@ -295,8 +295,10 @@ public:
 
 LFSET my_set;
 
-void benchmark(int num_thread)
+void benchmark(int num_thread, int thread_id)
 {
+	tid = thread_id;
+	retired_list.clear();
 	for (int i = 0; i < NUM_TEST / num_thread; ++i)
 	{
 		//	if (0 == i % 100000) cout << ".";
@@ -321,24 +323,24 @@ void benchmark(int num_thread)
 int main()
 {
 	vector<thread> worker;
-	for (auto &epoch : t_epochs)
+	for (auto& epoch : t_epochs)
 	{
-		epoch = new atomic_ullong{ULLONG_MAX};
+		epoch = new atomic_ullong{ ULLONG_MAX };
 	}
 	for (int num_thread = 1; num_thread <= MAX_THREAD; num_thread *= 2)
 	{
 		g_epoch = 0;
-		for (auto &epoch : t_epochs)
+		for (auto& epoch : t_epochs)
 		{
-			epoch->store(ULLONG_MAX);
+			epoch->store(ULLONG_MAX, memory_order_relaxed);
 		}
 		my_set.Init();
 		worker.clear();
 
 		auto start_t = high_resolution_clock::now();
 		for (int i = 0; i < num_thread; ++i)
-			worker.push_back(thread{benchmark, num_thread});
-		for (auto &th : worker)
+			worker.push_back(thread{ benchmark, num_thread, i});
+		for (auto& th : worker)
 			th.join();
 		auto du = high_resolution_clock::now() - start_t;
 		my_set.Dump();
