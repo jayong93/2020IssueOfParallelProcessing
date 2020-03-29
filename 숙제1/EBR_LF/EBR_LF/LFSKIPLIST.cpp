@@ -1,4 +1,4 @@
-#include <mutex>
+ï»¿#include <mutex>
 #include <thread>
 #include <iostream>
 #include <chrono>
@@ -30,17 +30,18 @@ thread_local vector<EpochNode> retired_list;
 thread_local unsigned tid;
 thread_local unsigned counter;
 constexpr unsigned epoch_freq = 20;
+constexpr unsigned empty_freq = 10;
 
 void retire(LFSKNode* node) {
 	retired_list.emplace_back(node, g_epoch.load(memory_order_relaxed));
 	++counter;
-	if (counter % epoch_freq) {
+	if (counter % epoch_freq == 0) {
 		g_epoch.fetch_add(1, memory_order_relaxed);
 	}
-	if (retired_list.size() > MAX_THREAD) {
+	if (counter % empty_freq == 0) {
 		auto min_epoch = ULLONG_MAX;
 		for (auto& epoch : t_epochs) {
-			auto e = epoch->load(memory_order_relaxed);
+			auto e = epoch->load(memory_order_acquire);
 			if (min_epoch > e) {
 				min_epoch = e;
 			}
@@ -58,11 +59,11 @@ void retire(LFSKNode* node) {
 }
 
 void start_op() {
-	t_epochs[tid]->store(g_epoch.load(memory_order_relaxed), memory_order_relaxed);
+	t_epochs[tid]->store(g_epoch.load(memory_order_relaxed), memory_order_release);
 }
 
 void end_op() {
-	t_epochs[tid]->store(ULLONG_MAX, memory_order_relaxed);
+	t_epochs[tid]->store(ULLONG_MAX, memory_order_release);
 }
 
 bool Marked(LFSKNode* curr)
@@ -111,7 +112,7 @@ public:
 	LFSKNode* next[MAX_LEVEL];
 	int topLevel;
 
-	// º¸ÃÊ³ëµå¿¡ °üÇÑ »ı¼ºÀÚ
+	// ë³´ì´ˆë…¸ë“œì— ê´€í•œ ìƒì„±ì
 	LFSKNode() {
 		for (int i = 0; i < MAX_LEVEL; i++) {
 			next[i] = AtomicMarkableReference(NULL, false);
@@ -126,7 +127,7 @@ public:
 		topLevel = MAX_LEVEL;
 	}
 
-	// ÀÏ¹İ³ëµå¿¡ °üÇÑ »ı¼ºÀÚ
+	// ì¼ë°˜ë…¸ë“œì— ê´€í•œ ìƒì„±ì
 	LFSKNode(int x, int height) {
 		key = x;
 		for (int i = 0; i < MAX_LEVEL; i++) {
@@ -194,7 +195,6 @@ public:
 
 	bool Find(int x, LFSKNode* preds[], LFSKNode* succs[])
 	{
-		start_op();
 		int bottomLevel = 0;
 		bool marked = false;
 		bool snip;
@@ -208,22 +208,25 @@ public:
 				curr = GetReference(pred->next[level]);
 				while (true) {
 					succ = curr->next[level];
-					while (Marked(succ)) { //Ç¥½ÃµÇ¾ú´Ù¸é Á¦°Å
+					while (Marked(succ)) { //í‘œì‹œë˜ì—ˆë‹¤ë©´ ì œê±°
 						snip = pred->CompareAndSet(level, curr, succ, false, false);
 						if (!snip) goto retry;
 						//	if (level == bottomLevel) freelist.free(curr);
+						if (level == bottomLevel) {
+							retire(curr);
+						}
 						curr = GetReference(pred->next[level]);
 						succ = curr->next[level];
 					}
 
-					// Ç¥½Ã µÇÁö ¾ÊÀº °æ¿ì
-					// Å°°ªÀÌ ÇöÀç ³ëµåÀÇ Å°°ªº¸´Ù ÀÛ´Ù¸é predÀüÁø
+					// í‘œì‹œ ë˜ì§€ ì•Šì€ ê²½ìš°
+					// í‚¤ê°’ì´ í˜„ì¬ ë…¸ë“œì˜ í‚¤ê°’ë³´ë‹¤ ì‘ë‹¤ë©´ predì „ì§„
 					if (curr->key < x) {
 						pred = curr;
 						curr = GetReference(succ);
-						// Å°°ªÀÌ ±×·¸Áö ¾ÊÀº °æ¿ì
-						// currÅ°´Â ´ë»óÅ°º¸´Ù °°°Å³ª Å«°ÍÀÌ¹Ç·Î predÀÇ Å°°ªÀÌ 
-						// ´ë»ó ³ëµåÀÇ ¹Ù·Î ¾Õ ³ëµå°¡ µÈ´Ù.		
+						// í‚¤ê°’ì´ ê·¸ë ‡ì§€ ì•Šì€ ê²½ìš°
+						// currí‚¤ëŠ” ëŒ€ìƒí‚¤ë³´ë‹¤ ê°™ê±°ë‚˜ í°ê²ƒì´ë¯€ë¡œ predì˜ í‚¤ê°’ì´ 
+						// ëŒ€ìƒ ë…¸ë“œì˜ ë°”ë¡œ ì• ë…¸ë“œê°€ ëœë‹¤.		
 					}
 					else {
 						break;
@@ -238,6 +241,7 @@ public:
 
 	bool Add(int x)
 	{
+		start_op();
 		int topLevel = 0;
 		while ((rand() % 2) == 1)
 		{
@@ -250,8 +254,9 @@ public:
 		LFSKNode* succs[MAX_LEVEL];
 		while (true) {
 			bool found = Find(x, preds, succs);
-			// ´ë»ó Å°¸¦ °®´Â Ç¥½ÃµÇÁö ¾ÊÀº ³ëµå¸¦ Ã£À¸¸é Å°°¡ ÀÌ¹Ì ÁıÇÕ¿¡ ÀÖÀ¸¹Ç·Î false ¹İÈ¯
+			// ëŒ€ìƒ í‚¤ë¥¼ ê°–ëŠ” í‘œì‹œë˜ì§€ ì•Šì€ ë…¸ë“œë¥¼ ì°¾ìœ¼ë©´ í‚¤ê°€ ì´ë¯¸ ì§‘í•©ì— ìˆìœ¼ë¯€ë¡œ false ë°˜í™˜
 			if (found) {
+				end_op();
 				return false;
 			}
 			else {
@@ -260,35 +265,43 @@ public:
 
 				for (int level = bottomLevel; level <= topLevel; level++) {
 					LFSKNode* succ = succs[level];
-					// ÇöÀç »õ³ëµåÀÇ next´Â Ç¥½ÃµÇÁö ¾ÊÀº »óÅÂ, find()°¡ ¹İÈ¯¹İ ³ëµå¸¦ ÂüÁ¶
+					// í˜„ì¬ ìƒˆë…¸ë“œì˜ nextëŠ” í‘œì‹œë˜ì§€ ì•Šì€ ìƒíƒœ, find()ê°€ ë°˜í™˜ë°˜ ë…¸ë“œë¥¼ ì°¸ì¡°
 					newNode->next[level] = Set(succ, false);
 				}
 
-				//find¿¡¼­ ¹İÈ¯ÇÑ pred¿Í succÀÇ °¡Àå ÃÖÇÏÃşÀ» ¸ÕÀú ¿¬°á
+				//findì—ì„œ ë°˜í™˜í•œ predì™€ succì˜ ê°€ì¥ ìµœí•˜ì¸µì„ ë¨¼ì € ì—°ê²°
 				LFSKNode* pred = preds[bottomLevel];
 				LFSKNode* succ = succs[bottomLevel];
 
 				newNode->next[bottomLevel] = Set(succ, false);
 
-				//pred->next°¡ ÇöÀç succ¸¦ °¡¸®Å°°í ÀÖ´ÂÁö ¾Ê¾Ò´ÂÁö È®ÀÎÇÏ°í newNode¿Í ÂüÁ¶¼³Á¤
+				//pred->nextê°€ í˜„ì¬ succë¥¼ ê°€ë¦¬í‚¤ê³  ìˆëŠ”ì§€ ì•Šì•˜ëŠ”ì§€ í™•ì¸í•˜ê³  newNodeì™€ ì°¸ì¡°ì„¤ì •
 				if (!pred->CompareAndSet(bottomLevel, succ, newNode, false, false))
-					// ½ÇÆĞÀÏ°æ¿ì´Â next°ªÀÌ º¯°æµÇ¾úÀ¸¹Ç·Î ´Ù½Ã È£ÃâÀ» ½ÃÀÛ
+					// ì‹¤íŒ¨ì¼ê²½ìš°ëŠ” nextê°’ì´ ë³€ê²½ë˜ì—ˆìœ¼ë¯€ë¡œ ë‹¤ì‹œ í˜¸ì¶œì„ ì‹œì‘
 					continue;
 
 				for (int level = bottomLevel + 1; level <= topLevel; level++) {
 					while (true) {
 						pred = GetReference(preds[level]);
 						succ = GetReference(succs[level]);
-						// ÃÖÇÏÃş º¸´Ù ³ôÀº ÃşµéÀ» Â÷·Ê´ë·Î ¿¬°á
-						// ¿¬°áÀ» ¼º°øÇÒ°æ¿ì ´ÙÀ½´Ü°è·Î ³Ñ¾î°£´Ù
-						if (pred->CompareAndSet(level, succ, newNode, false, false))
-							break;
-						//FindÈ£ÃâÀ» ÅëÇØ º¯°æµÈ preds, succs¸¦ »õ·Î ¾ò´Â´Ù.
-						Find(x, preds, succs);
+						// ìµœí•˜ì¸µ ë³´ë‹¤ ë†’ì€ ì¸µë“¤ì„ ì°¨ë¡€ëŒ€ë¡œ ì—°ê²°
+						// ì—°ê²°ì„ ì„±ê³µí• ê²½ìš° ë‹¤ìŒë‹¨ê³„ë¡œ ë„˜ì–´ê°„ë‹¤
+						auto new_next = newNode->next[level];
+						if (true == newNode->CompareAndSet(level, new_next, succ, false, false)) {
+							if (true == pred->CompareAndSet(level, succ, newNode, false, false))
+								break;
+							Find(x, preds, succs);
+						}
+						else {
+							Find(x, preds, succs);
+							end_op();
+							return true;
+						}
 					}
 				}
 
-				//¸ğµç Ãş¿¡¼­ ¿¬°áµÇ¾úÀ¸¸é true¹İÈ¯
+				Find(x, preds, succs);
+				//ëª¨ë“  ì¸µì—ì„œ ì—°ê²°ë˜ì—ˆìœ¼ë©´ trueë°˜í™˜
 				end_op();
 				return true;
 			}
@@ -297,6 +310,7 @@ public:
 
 	bool Remove(int x)
 	{
+		start_op();
 		int bottomLevel = 0;
 		LFSKNode* preds[MAX_LEVEL];
 		LFSKNode* succs[MAX_LEVEL];
@@ -305,34 +319,35 @@ public:
 		while (true) {
 			bool found = Find(x, preds, succs);
 			if (!found) {
-				//ÃÖÇÏÃş¿¡ Á¦°ÅÇÏ·Á´Â ³ëµå°¡ ¾ø°Å³ª, Â¦ÀÌ ¸Â´Â Å°¸¦ °®´Â ³ëµå°¡ Ç¥½Ã µÇ¾î ÀÖ´Ù¸é false¹İÈ¯
+				//ìµœí•˜ì¸µì— ì œê±°í•˜ë ¤ëŠ” ë…¸ë“œê°€ ì—†ê±°ë‚˜, ì§ì´ ë§ëŠ” í‚¤ë¥¼ ê°–ëŠ” ë…¸ë“œê°€ í‘œì‹œ ë˜ì–´ ìˆë‹¤ë©´ falseë°˜í™˜
+				end_op();
 				return false;
 			}
 			else {
 				LFSKNode* nodeToRemove = succs[bottomLevel];
-				//ÃÖÇÏÃşÀ» Á¦¿ÜÇÑ ¸ğµç ³ëµåÀÇ next¿Í mark¸¦ ÀĞ°í AttemptMark¸¦ ÀÌ¿ëÇÏ¿© ¿¬°á¿¡ Ç¥½Ã
+				//ìµœí•˜ì¸µì„ ì œì™¸í•œ ëª¨ë“  ë…¸ë“œì˜ nextì™€ markë¥¼ ì½ê³  AttemptMarkë¥¼ ì´ìš©í•˜ì—¬ ì—°ê²°ì— í‘œì‹œ
 				for (int level = nodeToRemove->topLevel; level >= bottomLevel + 1; level--) {
 					succ = nodeToRemove->next[level];
-					// ¸¸¾à ¿¬°áÀÌ Ç¥½ÃµÇ¾îÀÖÀ¸¸é ¸Ş¼­µå´Â ´ÙÀ½ÃşÀ¸·Î ÀÌµ¿
-					// ±×·¸Áö ¾ÊÀº °æ¿ì ´Ù¸¥ ½º·¹µå°¡ º´ÇàÀ» ÇŞ´Ù´Â ¶æÀÌ¹Ç·Î ÇöÀç ÃşÀÇ ¿¬°áÀ» ´Ù½Ã ÀĞ°í
-					// ¿¬°á¿¡ ´Ù½Ã Ç¥½ÃÇÏ·Á°í ½ÃµµÇÑ´Ù.
+					// ë§Œì•½ ì—°ê²°ì´ í‘œì‹œë˜ì–´ìˆìœ¼ë©´ ë©”ì„œë“œëŠ” ë‹¤ìŒì¸µìœ¼ë¡œ ì´ë™
+					// ê·¸ë ‡ì§€ ì•Šì€ ê²½ìš° ë‹¤ë¥¸ ìŠ¤ë ˆë“œê°€ ë³‘í–‰ì„ í–‡ë‹¤ëŠ” ëœ»ì´ë¯€ë¡œ í˜„ì¬ ì¸µì˜ ì—°ê²°ì„ ë‹¤ì‹œ ì½ê³ 
+					// ì—°ê²°ì— ë‹¤ì‹œ í‘œì‹œí•˜ë ¤ê³  ì‹œë„í•œë‹¤.
 					while (!Marked(succ)) {
 						nodeToRemove->CompareAndSet(level, succ, succ, false, true);
 						succ = nodeToRemove->next[level];
 					}
 				}
-				//ÀÌºÎºĞ¿¡ ¿Ô´Ù´Â °ÍÀº ÃÖÇÏÃşÀ» Á¦¿ÜÇÑ ¸ğµç Ãş¿¡ Ç¥½ÃÇß´Ù´Â ÀÇ¹Ì
+				//ì´ë¶€ë¶„ì— ì™”ë‹¤ëŠ” ê²ƒì€ ìµœí•˜ì¸µì„ ì œì™¸í•œ ëª¨ë“  ì¸µì— í‘œì‹œí–ˆë‹¤ëŠ” ì˜ë¯¸
 
 				bool marked = false;
 				succ = nodeToRemove->next[bottomLevel];
 				while (true) {
-					//ÃÖÇÏÃşÀÇ nextÂüÁ¶¿¡ Ç¥½ÃÇÏ°í ¼º°øÇßÀ¸¸é Remove()¿Ï·á
+					//ìµœí•˜ì¸µì˜ nextì°¸ì¡°ì— í‘œì‹œí•˜ê³  ì„±ê³µí–ˆìœ¼ë©´ Remove()ì™„ë£Œ
 					bool iMarkedIt = nodeToRemove->CompareAndSet(bottomLevel, succ, succ, false, true);
 					succ = succs[bottomLevel]->next[bottomLevel];
 
 					if (iMarkedIt) {
-						end_op();
 						Find(x, preds, succs);
+						end_op();
 						return true;
 					}
 					else if (Marked(succ)) {
@@ -388,8 +403,9 @@ public:
 
 LFSKSET my_set;
 
-void benchmark(int num_thread)
+void benchmark(int num_thread, int thread_id)
 {
+	tid = thread_id;
 	for (int i = 0; i < NUM_TEST / num_thread; ++i) {
 		//	if (0 == i % 100000) cout << ".";
 		switch (rand() % 3) {
@@ -406,19 +422,22 @@ int main()
 	for (auto& epoch : t_epochs) {
 		epoch = new atomic_ullong{ ULLONG_MAX };
 	}
-	vector <thread> worker;
-	for (int num_thread = 32; num_thread <= MAX_THREAD; num_thread *= 2) {
-		my_set.Init();
-		worker.clear();
+	for (size_t i = 0; i < 100; i++)
+	{
+		vector <thread> worker;
+		for (int num_thread = 1; num_thread <= MAX_THREAD; num_thread *= 2) {
+			my_set.Init();
+			worker.clear();
 
-		auto start_t = high_resolution_clock::now();
-		for (int i = 0; i < num_thread; ++i)
-			worker.push_back(thread{ benchmark, num_thread });
-		for (auto& th : worker) th.join();
-		auto du = high_resolution_clock::now() - start_t;
-		my_set.Dump();
+			auto start_t = high_resolution_clock::now();
+			for (int i = 0; i < num_thread; ++i)
+				worker.push_back(thread{ benchmark, num_thread, i });
+			for (auto& th : worker) th.join();
+			auto du = high_resolution_clock::now() - start_t;
+			my_set.Dump();
 
-		cout << num_thread << " Threads,  Time = ";
-		cout << duration_cast<milliseconds>(du).count() << " ms\n";
+			cout << num_thread << " Threads,  Time = ";
+			cout << duration_cast<milliseconds>(du).count() << " ms\n";
+		}
 	}
 }
