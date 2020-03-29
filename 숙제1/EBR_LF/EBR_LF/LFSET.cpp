@@ -116,6 +116,7 @@ thread_local vector<EpochNode> retired_list;
 thread_local unsigned tid;
 thread_local unsigned counter;
 constexpr unsigned epoch_freq = 20;
+constexpr unsigned empty_freq = 10;
 
 void retire(LFNODE* node)
 {
@@ -125,12 +126,12 @@ void retire(LFNODE* node)
 	{
 		g_epoch.fetch_add(1, memory_order_relaxed);
 	}
-	if (retired_list.size() > MAX_THREAD)
+	if (counter % empty_freq == 0)
 	{
 		auto min_epoch = ULLONG_MAX;
 		for (auto& epoch : t_epochs)
 		{
-			auto e = epoch->load(memory_order_relaxed);
+			auto e = epoch->load(memory_order_acquire);
 			if (min_epoch > e)
 			{
 				min_epoch = e;
@@ -151,12 +152,12 @@ void retire(LFNODE* node)
 
 void start_op()
 {
-	t_epochs[tid]->store(g_epoch.load(memory_order_relaxed), memory_order_relaxed);
+	t_epochs[tid]->store(g_epoch.load(memory_order_relaxed), memory_order_release);
 }
 
 void end_op()
 {
-	t_epochs[tid]->store(ULLONG_MAX, memory_order_relaxed);
+	t_epochs[tid]->store(ULLONG_MAX, memory_order_release);
 }
 
 class LFSET
