@@ -24,9 +24,6 @@
     <ClCompile Include="LFSKIPLIST.cpp">
       <Filter>소스 파일</Filter>
     </ClCompile>
-    <ClCompile Include="D:\Download\Telegram Download\fenceHP_set.cpp">
-      <Filter>소스 파일</Filter>
-    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="hazard_ptr.h">

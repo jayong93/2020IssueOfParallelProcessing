@@ -14,9 +14,6 @@ using namespace chrono;
 static const int NUM_TEST = 1000000;
 static const int RANGE = 1000;
 
-#define mfence atomic_thread_fence(memory_order_seq_cst)
-
-
 class LFNODE {
 public:
 	int key;
@@ -141,8 +138,8 @@ public:
 					goto retry;
 				}
 
-				hp2->set_hp(su);
 				hp_list.retire(cu, retired_list);
+				hp2->set_hp(su);
 
 				cu = su;
 				removed = cu->IsMarked();
@@ -191,7 +188,6 @@ public:
 					continue;
 				}
 				if (pred->CAS(curr, succ, false, false)) {
-					hp_pair.second.reset();
 					hp_list.retire(curr, retired_list);
 				}
 				return true;
@@ -240,7 +236,7 @@ void benchmark(int num_thread)
 int main()
 {
 	vector <thread> worker;
-	for (int num_thread = 1; num_thread <= 16; num_thread *= 2) {
+	for (int num_thread = 1; num_thread <= 32; num_thread *= 2) {
 		my_set.Init();
 		hp_list.clear();
 		worker.clear();
