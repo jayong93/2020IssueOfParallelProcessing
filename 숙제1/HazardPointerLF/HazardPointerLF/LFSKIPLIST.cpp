@@ -181,27 +181,27 @@ public:
 		auto hp3 = hp_list.acq_guard();
 		vector<HP> hp_vec;
 	retry:
-		while (true)
-		{
+		hp_vec.clear();
+		while (true) {
 			pred = head;
 			hp1->set_hp(pred);
-			for (int level = MAX_LEVEL - 1; level >= bottomLevel; level--)
-			{
-				do
-				{
-					curr = GetReference(pred->next[level]);
-					hp2->set_hp(curr);
-				} while (curr != GetReference(pred->next[level]));
+			for (int level = MAX_LEVEL - 1; level >= bottomLevel; level--) {
+				while (true) {
+					do {
+						curr = GetReference(pred->next[level]);
+						hp2->set_hp(curr);
+					} while (curr != GetReference(pred->next[level]));
 
-				while (true)
-				{
-					do
-					{
+					if (true == Marked(pred->next[level])) {
+						goto retry;
+					}
+
+					do {
 						succ = curr->next[level];
 						hp3->set_hp(GetReference(succ));
 					} while (curr->next[level] != succ);
-					while (Marked(succ))
-					{ //표시되었다면 제거
+
+					while (Marked(succ)) { //표시되었다면 제거
 						snip = pred->CompareAndSet(level, curr, succ, false, false);
 						if (!snip)
 							goto retry;
@@ -210,14 +210,10 @@ public:
 							hp_list.retire(curr, retired_list);
 						}
 
-						do
-						{
-							curr = GetReference(pred->next[level]);
-							hp2->set_hp(curr);
-						} while (GetReference(pred->next[level]) != curr);
+						curr = GetReference(succ);
+						hp2->set_hp(curr);
 
-						do
-						{
+						do {
 							succ = curr->next[level];
 							hp3->set_hp(GetReference(succ));
 						} while (curr->next[level] != succ);
@@ -229,8 +225,6 @@ public:
 					{
 						pred = curr;
 						hp1->set_hp(pred);
-						curr = GetReference(succ);
-						hp2->set_hp(curr);
 
 						// 키값이 그렇지 않은 경우
 						// curr키는 대상키보다 같거나 큰것이므로 pred의 키값이
@@ -241,15 +235,20 @@ public:
 						break;
 					}
 				}
-				preds[level] = pred;
-				auto pred_hp = hp_list.acq_guard();
-				pred_hp->set_hp(pred);
-				hp_vec.emplace_back(move(pred_hp));
 
-				succs[level] = curr;
-				auto succ_hp = hp_list.acq_guard();
-				succ_hp->set_hp(curr);
-				hp_vec.emplace_back(move(succ_hp));
+				if (preds != nullptr) {
+					preds[level] = pred;
+					auto pred_hp = hp_list.acq_guard();
+					pred_hp->set_hp(pred);
+					hp_vec.emplace_back(move(pred_hp));
+				}
+
+				if (succs != nullptr) {
+					succs[level] = curr;
+					auto succ_hp = hp_list.acq_guard();
+					succ_hp->set_hp(curr);
+					hp_vec.emplace_back(move(succ_hp));
+				}
 			}
 			return make_tuple(curr->key == x, move(hp_vec));
 		}
@@ -283,12 +282,12 @@ public:
 				hp_new->set_hp(newNode);
 				newNode->InitNode(x, topLevel);
 
-				for (int level = bottomLevel; level <= topLevel; level++)
-				{
-					LFSKNode* succ = succs[level];
-					// 현재 새노드의 next는 표시되지 않은 상태, find()가 반환반 노드를 참조
-					newNode->next[level] = Set(succ, false);
-				}
+				//for (int level = bottomLevel; level <= topLevel; level++)
+				//{
+				//	LFSKNode* succ = succs[level];
+				//	// 현재 새노드의 next는 표시되지 않은 상태, find()가 반환반 노드를 참조
+				//	newNode->next[level] = Set(succ, false);
+				//}
 
 				//find에서 반환한 pred와 succ의 가장 최하층을 먼저 연결
 				LFSKNode* pred = preds[bottomLevel];
@@ -309,10 +308,17 @@ public:
 						succ = GetReference(succs[level]);
 						// 최하층 보다 높은 층들을 차례대로 연결
 						// 연결을 성공할경우 다음단계로 넘어간다
-						if (pred->CompareAndSet(level, succ, newNode, false, false))
-							break;
-						//Find호출을 통해 변경된 preds, succs를 새로 얻는다.
-						Find(x, preds, succs);
+						auto new_next = newNode->next[level];
+						if (true == newNode->CompareAndSet(level, new_next, succ, false, false)) {
+							if (true == pred->CompareAndSet(level, succ, newNode, false, false))
+								break;
+							auto [_a, hpv] = Find(x, preds, succs);
+							hp_vec = move(hpv);
+						}
+						else {
+							Find(x, preds, succs);
+							return true;
+						}
 					}
 				}
 
@@ -388,46 +394,42 @@ public:
 		LFSKNode* succ = NULL;
 		hp_pred->set_hp(pred);
 
-		for (int level = MAX_LEVEL - 1; level >= bottomLevel; level--)
-		{
-			do
-			{
+		for (int level = MAX_LEVEL - 1; level >= bottomLevel; level--) {
+			do {
 				curr = GetReference(pred->next[level]);
 				hp_curr->set_hp(curr);
 			} while (curr != GetReference(pred->next[level]));
+			if (true == Marked(pred->next[level])) {
+				auto [found, _] = Find(x, nullptr, nullptr);
+				return found;
+			}
 
-			while (true)
-			{
-				do
-				{
+			while (true) {
+				do {
 					succ = curr->next[level];
-					hp_succ->set_hp(succ);
+					hp_succ->set_hp(GetReference(succ));
 				} while (succ != curr->next[level]);
-				while (Marked(succ))
-				{
-					auto old_curr = curr;
-					do
-					{
-						curr = GetReference(old_curr->next[level]);
-						hp_temp->set_hp(curr);
-					} while (curr != GetReference(old_curr->next[level]));
+				while (Marked(succ)) {
+					if (pred->next[level] != GetReference(succ)) {
+						auto [found, _] = Find(x, nullptr, nullptr);
+						return found;
+					}
+
+					curr = GetReference(succ);
 					hp_curr->set_hp(curr);
 
-					do
-					{
+					do {
 						succ = curr->next[level];
-						hp_succ->set_hp(succ);
+						hp_succ->set_hp(GetReference(succ));
 					} while (succ != curr->next[level]);
 				}
-				if (curr->key < x)
-				{
+				if (curr->key < x) {
 					pred = curr;
 					hp_pred->set_hp(pred);
 					curr = GetReference(succ);
 					hp_curr->set_hp(curr);
 				}
-				else
-				{
+				else {
 					break;
 				}
 			}
@@ -477,20 +479,24 @@ void benchmark(int num_thread)
 int main()
 {
 	vector<thread> worker;
-	for (int num_thread = 1; num_thread <= 32; num_thread *= 2)
+	for (size_t i = 0; i < 100; i++)
 	{
-		my_set.Init();
-		worker.clear();
+		for (int num_thread = 1; num_thread <= 32; num_thread *= 2)
+		{
+			my_set.Init();
+			worker.clear();
 
-		auto start_t = high_resolution_clock::now();
-		for (int i = 0; i < num_thread; ++i)
-			worker.push_back(thread{ benchmark, num_thread });
-		for (auto& th : worker)
-			th.join();
-		auto du = high_resolution_clock::now() - start_t;
-		my_set.Dump();
+			auto start_t = high_resolution_clock::now();
+			for (int i = 0; i < num_thread; ++i)
+				worker.push_back(thread{ benchmark, num_thread });
+			for (auto& th : worker)
+				th.join();
+			auto du = high_resolution_clock::now() - start_t;
+			my_set.Dump();
 
-		cout << num_thread << " Threads,  Time = ";
-		cout << duration_cast<milliseconds>(du).count() << " ms\n";
+			cout << num_thread << " Threads,  Time = ";
+			cout << duration_cast<milliseconds>(du).count() << " ms\n";
+		}
+
 	}
 }
