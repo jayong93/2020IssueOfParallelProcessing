@@ -59,7 +59,7 @@ void retire(LFSKNode* node) {
 }
 
 void start_op() {
-	t_epochs[tid]->store(g_epoch.load(memory_order_relaxed));
+	t_epochs[tid]->store(g_epoch.load());
 }
 
 void end_op() {
