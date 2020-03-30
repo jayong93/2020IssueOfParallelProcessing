@@ -121,6 +121,14 @@ public:
 				hp2->set_hp(cu);
 				//mfence;
 			} while (pr->GetNext() != cu);
+			/*
+			 * pred가 지워졌는지 체크하지 않으면 curr의 next(즉, succ)가 이미 다른 thread에 의해 delete 된 상태에서 읽을 수도 있다
+			 * 위의 do-while 확인에서 pred가 이미 자료구조에서 빠져 있었다면, pred->next는 변화할 일이 없다.
+			 * 그러므로 위의 확인 루프는 항상 성공할 수 밖에 없고, curr가 여전히 자료구조에 존재하는지 확인할 수 없다.
+			 * 즉, 그 뒤에 연결된 모든 node들이 살아있다는 보장을 할 수 없다.
+			 *
+			 * 만약 아래의 marking 체크를 한다면, 혹시 curr가 자료구조에서 빠져있는 상황이라도 다음 loop의 검사에서 걸리기 때문에 안전하다.
+			 */
 			if (true == pr->IsMarked()) {
 				goto retry;
 			}
