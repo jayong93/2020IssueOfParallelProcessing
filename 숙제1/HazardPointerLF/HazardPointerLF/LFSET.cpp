@@ -202,7 +202,6 @@ public:
 		auto hp1 = hp_list.acq_guard();
 		auto hp2 = hp_list.acq_guard();
 
-	retry:
 		LFNODE* curr = &head;
 		LFNODE* next;
 
@@ -214,7 +213,11 @@ public:
 				//mfence;
 			} while (curr->GetNext() != next);
 			if (true == curr->IsMarked()) {
-				goto retry;
+				LFNODE* pred;
+				auto [hp_pred, hp_curr] = Find(x, &pred, &curr);
+				hp1 = move(hp_pred);
+				hp2 = move(hp_curr);
+				break;
 			}
 			curr = next;
 		}

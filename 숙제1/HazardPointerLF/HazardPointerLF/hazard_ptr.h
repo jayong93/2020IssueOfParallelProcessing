@@ -31,6 +31,7 @@ struct HazardPtrGuard {
 		other.ptr = nullptr;
 	}
 	HazardPtrGuard<T>& operator=(HazardPtrGuard<T>&& other) {
+		this->reset();
 		this->ptr = other.ptr;
 		other.ptr = nullptr;
 		return *this;
