@@ -128,7 +128,7 @@ void ThreadFunc(int num_thread)
 
 int main()
 {
-	for (auto n = 32; n <= 32; n *= 2) {
+	for (auto n = 1; n <= 32; n *= 2) {
 		my_queue.Init();
 		vector <thread> threads;
 		auto s = high_resolution_clock::now();
