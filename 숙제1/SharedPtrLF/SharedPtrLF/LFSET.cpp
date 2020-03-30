@@ -1,206 +1,165 @@
+﻿#include <iostream>
+#include <cstdlib>
 #include <mutex>
 #include <thread>
-#include <iostream>
-#include <chrono>
 #include <vector>
-#include <mutex>
+#include <algorithm>
+#include <iterator>
+#include <chrono>
 #include <memory>
 #include <atomic>
 
 using namespace std;
-using namespace chrono;
 
-static const int NUM_TEST = 4000000;
-static const int RANGE = 1000;
+static constexpr int NUM_TEST = 400000;
+static constexpr int RANGE = 1000;
 
-class LFNODE {
+struct Node {
 public:
 	int key;
-	unsigned next;
+	shared_ptr<Node> next;
+	mutex m_lock;
+	bool deleted{ false };
 
-	LFNODE() {
-		next = 0;
-	}
-	LFNODE(int x) {
-		key = x;
-		next = 0;
-	}
-	~LFNODE() {
-	}
-	LFNODE* GetNext() {
-		return reinterpret_cast<LFNODE*>(next & 0xFFFFFFFE);
-	}
-
-	void SetNext(LFNODE* ptr) {
-		next = reinterpret_cast<unsigned>(ptr);
-	}
-
-	LFNODE* GetNextWithMark(bool* mark) {
-		int temp = next;
-		*mark = (temp % 2) == 1;
-		return reinterpret_cast<LFNODE*>(temp & 0xFFFFFFFE);
-	}
-
-	bool CAS(int old_value, int new_value)
-	{
-		return atomic_compare_exchange_strong(
-			reinterpret_cast<atomic_int*>(&next),
-			&old_value, new_value);
-	}
-
-	bool CAS(LFNODE* old_next, LFNODE* new_next, bool old_mark, bool new_mark) {
-		unsigned old_value = reinterpret_cast<unsigned>(old_next);
-		if (old_mark) old_value = old_value | 0x1;
-		else old_value = old_value & 0xFFFFFFFE;
-		unsigned new_value = reinterpret_cast<unsigned>(new_next);
-		if (new_mark) new_value = new_value | 0x1;
-		else new_value = new_value & 0xFFFFFFFE;
-		return CAS(old_value, new_value);
-	}
-
-	bool TryMark(LFNODE* ptr)
-	{
-		unsigned old_value = reinterpret_cast<unsigned>(ptr) & 0xFFFFFFFE;
-		unsigned new_value = old_value | 1;
-		return CAS(old_value, new_value);
-	}
-
-	bool IsMarked() {
-		return (0 != (next & 1));
-	}
+	Node() : next{ nullptr } {}
+	Node(int key) : key{ key }, next{ nullptr } {}
+	~Node() {}
+	void lock() { m_lock.lock(); }
+	void unlock() { m_lock.unlock(); }
 };
 
-class LFSET
-{
-	LFNODE head, tail;
+class ZSet {
+	shared_ptr<Node> head, tail;
 public:
-	LFSET()
-	{
-		head.key = 0x80000000;
-		tail.key = 0x7FFFFFFF;
-		head.SetNext(&tail);
-	}
-	void Init()
-	{
-		while (head.GetNext() != &tail) {
-			LFNODE* temp = head.GetNext();
-			head.next = temp->next;
-			delete temp;
-		}
-	}
+	ZSet() : head{ make_shared<Node>(0x80000000) }, tail{ make_shared<Node>(0x7fffffff) } { head->next = tail; }
 
-	void Dump()
-	{
-		LFNODE* ptr = head.GetNext();
-		cout << "Result Contains : ";
-		for (int i = 0; i < 20; ++i) {
-			cout << ptr->key << ", ";
-			if (&tail == ptr) break;
-			ptr = ptr->GetNext();
-		}
-		cout << endl;
-	}
+	bool add(int x) {
+		shared_ptr<Node> pred, curr;
+		while (true)
+		{
+			pred = head;
+			curr = atomic_load(&(pred->next));
 
-	void Find(int x, LFNODE** pred, LFNODE** curr)
-	{
-	retry:
-		LFNODE* pr = &head;
-		LFNODE* cu = pr->GetNext();
-		while (true) {
-			bool removed;
-			LFNODE* su = cu->GetNextWithMark(&removed);
-			while (true == removed) {
-				if (false == pr->CAS(cu, su, false, false))
-					goto retry;
-				cu = su;
-				su = cu->GetNextWithMark(&removed);
+			while (curr->key < x) {
+				pred = curr;
+				curr = atomic_load(&(curr->next));
 			}
-			if (cu->key >= x) {
-				*pred = pr; *curr = cu;
-				return;
-			}
-			pr = cu;
-			cu = cu->GetNext();
-		}
-	}
-	bool Add(int x)
-	{
-		LFNODE* pred, * curr;
-		while (true) {
-			Find(x, &pred, &curr);
+			{
+				lock_guard<mutex> pl(pred->m_lock);
+				lock_guard<mutex> cl(curr->m_lock);
+				if (validate(pred, curr)) {
+					if (curr->key == x) { return false; }
+					else {
+						auto e = make_shared<Node>(x);
+						e->next = curr;
 
-			if (curr->key == x) {
-				return false;
-			}
-			else {
-				LFNODE* e = new LFNODE(x);
-				e->SetNext(curr);
-				if (false == pred->CAS(curr, e, false, false))
-					continue;
-				return true;
+						// �� �κ��� ������ ���̽��� �״´�.
+						// shared_ptr�� ������ �� ���� �ܰ踦 ��ġ�� ������ ���� ���� �ٸ� thread�� �о ���� ���� �ִ�.
+						atomic_store(&(pred->next), e);
+						return true;
+					}
+				}
 			}
 		}
 	}
-	bool Remove(int x)
-	{
-		LFNODE* pred, * curr;
-		while (true) {
-			Find(x, &pred, &curr);
 
-			if (curr->key != x) {
-				return false;
+	bool remove(int x) {
+		shared_ptr<Node> pred, curr;
+		while (true)
+		{
+			pred = head;
+			curr = atomic_load(&(pred->next));
+
+			while (curr->key < x) {
+				pred = curr;
+				curr = atomic_load(&(curr->next));
 			}
-			else {
-				LFNODE* succ = curr->GetNext();
-				if (false == curr->TryMark(succ)) continue;
-				pred->CAS(curr, succ, false, false);
-				// delete curr;
-				return true;
+
+			{
+				lock_guard<mutex> pl(pred->m_lock);
+				lock_guard<mutex> cl(curr->m_lock);
+				if (validate(pred, curr))
+				{
+					if (curr->key != x) { return false; }
+					else {
+						curr->deleted = true;
+						atomic_store(&(pred->next), atomic_load(&(curr->next)));
+						return true;
+					}
+				}
 			}
 		}
 	}
-	bool Contains(int x)
-	{
-		LFNODE* curr = &head;
-		while (curr->key < x) {
-			curr = curr->GetNext();
+
+	bool contains(int x) {
+		shared_ptr<Node> pred, curr;
+		while (true)
+		{
+			pred = head;
+			curr = atomic_load(&(pred->next));
+
+			while (curr->key < x) {
+				pred = curr;
+				curr = atomic_load(&(curr->next));
+			}
+			return curr->key == x && !curr->deleted;
 		}
-
-		return (false == curr->IsMarked()) && (x == curr->key);
 	}
-};
 
-LFSET my_set;
+	void clear() {
+		head->next = tail;
+	}
 
-void benchmark(int num_thread)
-{
+	bool validate(shared_ptr<Node>& pred, shared_ptr<Node>& curr) {
+		return !pred->deleted && !curr->deleted && atomic_load(&(pred->next)) == curr;
+	}
+
+	void dump(size_t count) {
+		auto& ptr = head->next;
+		cout << count << " Result : ";
+		for (auto i = 0; i < count && ptr != tail; ++i) {
+			cout << ptr->key << " ";
+			ptr = ptr->next;
+		}
+		cout << "\n";
+	}
+} mySet;
+
+void benchMark(int num_thread) {
 	for (int i = 0; i < NUM_TEST / num_thread; ++i) {
-		//	if (0 == i % 100000) cout << ".";
-		switch (rand() % 3) {
-		case 0: my_set.Add(rand() % RANGE); break;
-		case 1: my_set.Remove(rand() % RANGE); break;
-		case 2: my_set.Contains(rand() % RANGE); break;
-		default: cout << "ERROR!!!\n"; exit(-1);
+		switch (rand() % 3)
+		{
+		case 0:
+			mySet.add(rand() % RANGE);
+			break;
+		case 1:
+			mySet.remove(rand() % RANGE);
+			break;
+		case 2:
+			mySet.contains(rand() % RANGE);
+			break;
+		default:
+			cout << "Error\n";
+			exit(1);
 		}
 	}
 }
 
-int main()
-{
-	vector <thread> worker;
-	for (int num_thread = 1; num_thread <= 16; num_thread *= 2) {
-		my_set.Init();
-		worker.clear();
+int main() {
+	vector<thread> threads;
 
-		auto start_t = high_resolution_clock::now();
-		for (int i = 0; i < num_thread; ++i)
-			worker.push_back(thread{ benchmark, num_thread });
-		for (auto& th : worker) th.join();
-		auto du = high_resolution_clock::now() - start_t;
-		my_set.Dump();
+	for (auto thread_num = 1; thread_num <= 16; thread_num *= 2) {
+		mySet.clear();
+		threads.clear();
 
-		cout << num_thread << " Threads,  Time = ";
-		cout << duration_cast<milliseconds>(du).count() << " ms\n";
+		auto start_t = chrono::high_resolution_clock::now();
+		generate_n(back_inserter(threads), thread_num, [thread_num]() {return thread{ benchMark, thread_num }; });
+		for (auto& t : threads) { t.join(); }
+		auto du = chrono::high_resolution_clock::now() - start_t;
+
+		mySet.dump(20);
+
+		cout << thread_num << "Threads, Time = ";
+		cout << chrono::duration_cast<chrono::milliseconds>(du).count() << "ms \n";
 	}
-	system("pause");
 }
