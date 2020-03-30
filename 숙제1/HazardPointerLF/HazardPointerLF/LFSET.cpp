@@ -121,6 +121,9 @@ public:
 				hp2->set_hp(cu);
 				//mfence;
 			} while (pr->GetNext() != cu);
+			if (true == pr->IsMarked()) {
+				goto retry;
+			}
 
 			bool removed = cu->IsMarked();
 			LFNODE* su;
@@ -196,11 +199,13 @@ public:
 	}
 	bool Contains(int x)
 	{
+		auto hp1 = hp_list.acq_guard();
+		auto hp2 = hp_list.acq_guard();
+
+	retry:
 		LFNODE* curr = &head;
 		LFNODE* next;
 
-		auto hp1 = hp_list.acq_guard();
-		auto hp2 = hp_list.acq_guard();
 		while (curr->key < x) {
 			hp1->set_hp(curr);
 			do {
@@ -208,6 +213,9 @@ public:
 				hp2->set_hp(next);
 				//mfence;
 			} while (curr->GetNext() != next);
+			if (true == curr->IsMarked()) {
+				goto retry;
+			}
 			curr = next;
 		}
 
