@@ -33,15 +33,15 @@ constexpr unsigned epoch_freq = 20;
 constexpr unsigned empty_freq = 10;
 
 void retire(LFSKNode* node) {
-	retired_list.emplace_back(node, g_epoch.load(memory_order_relaxed));
+	retired_list.emplace_back(node, g_epoch.load());
 	++counter;
 	if (counter % epoch_freq == 0) {
-		g_epoch.fetch_add(1, memory_order_relaxed);
+		g_epoch.fetch_add(1);
 	}
 	if (counter % empty_freq == 0) {
 		auto min_epoch = ULLONG_MAX;
 		for (auto& epoch : t_epochs) {
-			auto e = epoch->load(memory_order_acquire);
+			auto e = epoch->load();
 			if (min_epoch > e) {
 				min_epoch = e;
 			}
@@ -59,11 +59,11 @@ void retire(LFSKNode* node) {
 }
 
 void start_op() {
-	t_epochs[tid]->store(g_epoch.load(memory_order_relaxed), memory_order_release);
+	t_epochs[tid]->store(g_epoch.load(memory_order_relaxed));
 }
 
 void end_op() {
-	t_epochs[tid]->store(ULLONG_MAX, memory_order_release);
+	t_epochs[tid]->store(ULLONG_MAX);
 }
 
 bool Marked(LFSKNode* curr)
@@ -109,7 +109,7 @@ class LFSKNode
 {
 public:
 	int key;
-	LFSKNode* next[MAX_LEVEL];
+	LFSKNode* volatile next[MAX_LEVEL];
 	int topLevel;
 
 	// 보초노드에 관한 생성자
@@ -159,7 +159,7 @@ public:
 		int next_addr = reinterpret_cast<int>(next_node);
 		if (next_mark) next_addr = next_addr | 0x1;
 		else next_addr = next_addr & 0xFFFFFFFE;
-		return atomic_compare_exchange_strong(reinterpret_cast<atomic_int*>(&next[level]), &old_addr, next_addr);
+		return atomic_compare_exchange_strong((atomic_int*)(&next[level]), &old_addr, next_addr);
 		//int prev_addr = InterlockedCompareExchange(reinterpret_cast<long *>(&next[level]), next_addr, old_addr);
 		//return (prev_addr == old_addr);
 	}
@@ -385,8 +385,9 @@ public:
 				}
 			}
 		}
+		auto retval = (curr->key == x);
 		end_op();
-		return (curr->key == x);
+		return retval;
 	}
 	void Dump()
 	{
@@ -425,7 +426,11 @@ int main()
 	for (size_t i = 0; i < 100; i++)
 	{
 		vector <thread> worker;
-		for (int num_thread = 1; num_thread <= MAX_THREAD; num_thread *= 2) {
+		for (int num_thread = 32; num_thread <= MAX_THREAD; num_thread *= 2) {
+			g_epoch.store(0, memory_order_relaxed);
+			for (auto& epoch : t_epochs) {
+				epoch->store(ULLONG_MAX, memory_order_relaxed);
+			}
 			my_set.Init();
 			worker.clear();
 
