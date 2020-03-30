@@ -18,10 +18,10 @@
     <ClCompile Include="lfqueue.cpp">
       <Filter>소스 파일</Filter>
     </ClCompile>
-    <ClCompile Include="LFSET.cpp">
+    <ClCompile Include="LazySET.cpp">
       <Filter>소스 파일</Filter>
     </ClCompile>
-    <ClCompile Include="LFSKIPLIST.cpp">
+    <ClCompile Include="LazySKIPLIST.cpp">
       <Filter>소스 파일</Filter>
     </ClCompile>
   </ItemGroup>
