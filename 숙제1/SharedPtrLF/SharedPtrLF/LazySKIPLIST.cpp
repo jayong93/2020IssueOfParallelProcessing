@@ -11,7 +11,7 @@
 using namespace std;
 using namespace chrono;
 
-static const int NUM_TEST = 400000;
+static const int NUM_TEST = 4000000;
 static const int RANGE = 1000;
 static const int MAX_LEVEL = 10;
 
@@ -276,7 +276,7 @@ void benchmark(int num_thread)
 int main()
 {
 	vector <thread> worker;
-	for (int num_thread = 1; num_thread <= 16; num_thread *= 2) {
+	for (int num_thread = 1; num_thread <= 32; num_thread *= 2) {
 		my_set.Init();
 		worker.clear();
 

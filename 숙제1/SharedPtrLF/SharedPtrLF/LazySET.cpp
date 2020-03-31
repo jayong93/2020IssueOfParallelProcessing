@@ -148,7 +148,7 @@ void benchMark(int num_thread) {
 int main() {
 	vector<thread> threads;
 
-	for (auto thread_num = 1; thread_num <= 16; thread_num *= 2) {
+	for (auto thread_num = 1; thread_num <= 32; thread_num *= 2) {
 		mySet.clear();
 		threads.clear();
 
