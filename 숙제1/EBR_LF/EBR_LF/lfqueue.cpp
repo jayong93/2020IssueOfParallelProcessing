@@ -47,7 +47,7 @@ void retire(NODE* node) {
 	if (counter % empty_freq == 0) {
 		auto min_epoch = ULLONG_MAX;
 		for (auto& epoch : t_epochs) {
-			auto e = epoch->load(memory_order_relaxed);
+			auto e = epoch->load(memory_order_acquire);
 			if (min_epoch > e) {
 				min_epoch = e;
 			}
@@ -65,11 +65,11 @@ void retire(NODE* node) {
 }
 
 void start_op() {
-	t_epochs[tid]->store(g_epoch.load(memory_order_relaxed), memory_order_relaxed);
+	t_epochs[tid]->store(g_epoch.load(memory_order_relaxed), memory_order_release);
 }
 
 void end_op() {
-	t_epochs[tid]->store(ULLONG_MAX, memory_order_relaxed);
+	t_epochs[tid]->store(ULLONG_MAX, memory_order_release);
 }
 
 
@@ -187,6 +187,10 @@ int main()
 		epoch = new atomic_ullong{ ULLONG_MAX };
 	}
 	for (auto n = 1; n <= MAX_THREAD; n *= 2) {
+		g_epoch.store(0, memory_order_relaxed);
+		for (auto& epoch : t_epochs) {
+			epoch->store(ULLONG_MAX, memory_order_relaxed);
+		}
 		my_queue.Init();
 		vector <thread> threads;
 		auto s = high_resolution_clock::now();
