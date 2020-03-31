@@ -96,8 +96,8 @@ public:
 
 			if (last == first) {
 				if (lastnext == nullptr) {
-					cout << "EMPTY!!!\n";
-					this_thread::sleep_for(1ms);
+					//cout << "EMPTY!!!\n";
+					//this_thread::sleep_for(1ms);
 					return -1;
 				}
 				else
@@ -149,7 +149,7 @@ void ThreadFunc(int num_thread)
 
 int main()
 {
-	for (auto n = 1; n <= 16; n *= 2) {
+	for (auto n = 1; n <= 32; n *= 2) {
 		my_queue.Init();
 		hp_list.clear();
 		vector <thread> threads;

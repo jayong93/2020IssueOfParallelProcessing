@@ -12,7 +12,7 @@
 using namespace std;
 using namespace chrono;
 
-static const int NUM_TEST = 100000;
+static const int NUM_TEST = 4000000;
 static const int RANGE = 1000;
 static const int MAX_LEVEL = 10;
 

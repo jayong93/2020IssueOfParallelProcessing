@@ -11,7 +11,7 @@
 using namespace std;
 using namespace chrono;
 
-static const int NUM_TEST = 1000000;
+static const int NUM_TEST = 10000000;
 static const int RANGE = 1000;
 
 class LFNODE {

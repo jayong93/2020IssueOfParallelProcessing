@@ -12,23 +12,7 @@
 using namespace std;
 using namespace chrono;
 
-unsigned long fast_rand(void)
-{ //period 2^96-1
-	static unsigned long x = 123456789, y = 362436069, z = 521288629;
-	unsigned long t;
-	x ^= x << 16;
-	x ^= x >> 5;
-	x ^= x << 1;
-
-	t = x;
-	x = y;
-	y = z;
-	z = t ^ x ^ y;
-
-	return z;
-}
-
-static const int NUM_TEST = 4000000;
+static const int NUM_TEST = 10000000;
 static const int RANGE = 1000;
 constexpr unsigned MAX_THREAD = 32;
 
@@ -303,16 +287,16 @@ void benchmark(int num_thread, int thread_id)
 	for (int i = 0; i < NUM_TEST / num_thread; ++i)
 	{
 		//	if (0 == i % 100000) cout << ".";
-		switch (fast_rand() % 3)
+		switch (rand() % 3)
 		{
 		case 0:
-			my_set.Add(fast_rand() % RANGE);
+			my_set.Add(rand() % RANGE);
 			break;
 		case 1:
-			my_set.Remove(fast_rand() % RANGE);
+			my_set.Remove(rand() % RANGE);
 			break;
 		case 2:
-			my_set.Contains(fast_rand() % RANGE);
+			my_set.Contains(rand() % RANGE);
 			break;
 		default:
 			cout << "ERROR!!!\n";

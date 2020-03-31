@@ -423,26 +423,23 @@ int main()
 	for (auto& epoch : t_epochs) {
 		epoch = new atomic_ullong{ ULLONG_MAX };
 	}
-	for (size_t i = 0; i < 100; i++)
-	{
-		vector <thread> worker;
-		for (int num_thread = 32; num_thread <= MAX_THREAD; num_thread *= 2) {
-			g_epoch.store(0, memory_order_relaxed);
-			for (auto& epoch : t_epochs) {
-				epoch->store(ULLONG_MAX, memory_order_relaxed);
-			}
-			my_set.Init();
-			worker.clear();
-
-			auto start_t = high_resolution_clock::now();
-			for (int i = 0; i < num_thread; ++i)
-				worker.push_back(thread{ benchmark, num_thread, i });
-			for (auto& th : worker) th.join();
-			auto du = high_resolution_clock::now() - start_t;
-			my_set.Dump();
-
-			cout << num_thread << " Threads,  Time = ";
-			cout << duration_cast<milliseconds>(du).count() << " ms\n";
+	vector <thread> worker;
+	for (int num_thread = 1; num_thread <= MAX_THREAD; num_thread *= 2) {
+		g_epoch.store(0, memory_order_relaxed);
+		for (auto& epoch : t_epochs) {
+			epoch->store(ULLONG_MAX, memory_order_relaxed);
 		}
+		my_set.Init();
+		worker.clear();
+
+		auto start_t = high_resolution_clock::now();
+		for (int i = 0; i < num_thread; ++i)
+			worker.push_back(thread{ benchmark, num_thread, i });
+		for (auto& th : worker) th.join();
+		auto du = high_resolution_clock::now() - start_t;
+		my_set.Dump();
+
+		cout << num_thread << " Threads,  Time = ";
+		cout << duration_cast<milliseconds>(du).count() << " ms\n";
 	}
 }
