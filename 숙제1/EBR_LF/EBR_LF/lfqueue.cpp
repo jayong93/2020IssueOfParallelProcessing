@@ -36,14 +36,15 @@ thread_local vector<EpochNode> retired_list;
 thread_local unsigned tid;
 thread_local unsigned counter;
 constexpr unsigned epoch_freq = 20;
+constexpr unsigned empty_freq = 10;
 
 void retire(NODE* node) {
 	retired_list.emplace_back(node, g_epoch.load(memory_order_relaxed));
 	++counter;
-	if (counter % epoch_freq) {
+	if (counter % epoch_freq == 0) {
 		g_epoch.fetch_add(1, memory_order_relaxed);
 	}
-	if (retired_list.size() > MAX_THREAD) {
+	if (counter % empty_freq == 0) {
 		auto min_epoch = ULLONG_MAX;
 		for (auto& epoch : t_epochs) {
 			auto e = epoch->load(memory_order_relaxed);
@@ -185,7 +186,7 @@ int main()
 	for (auto& epoch : t_epochs) {
 		epoch = new atomic_ullong{ ULLONG_MAX };
 	}
-	for (auto n = 32; n <= MAX_THREAD; n *= 2) {
+	for (auto n = 1; n <= MAX_THREAD; n *= 2) {
 		my_queue.Init();
 		vector <thread> threads;
 		auto s = high_resolution_clock::now();
