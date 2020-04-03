@@ -111,15 +111,16 @@ public:
 	int key;
 	LFSKNode* volatile next[MAX_LEVEL];
 	int topLevel;
+	atomic_uint ref_count;
 
 	// 보초노드에 관한 생성자
-	LFSKNode() {
+	LFSKNode() : ref_count{MAX_LEVEL} {
 		for (int i = 0; i < MAX_LEVEL; i++) {
 			next[i] = AtomicMarkableReference(NULL, false);
 		}
 		topLevel = MAX_LEVEL;
 	}
-	LFSKNode(int myKey) {
+	LFSKNode(int myKey) : ref_count{ MAX_LEVEL } {
 		key = myKey;
 		for (int i = 0; i < MAX_LEVEL; i++) {
 			next[i] = AtomicMarkableReference(NULL, false);
@@ -128,7 +129,7 @@ public:
 	}
 
 	// 일반노드에 관한 생성자
-	LFSKNode(int x, int height) {
+	LFSKNode(int x, int height) : ref_count{ height } {
 		key = x;
 		for (int i = 0; i < MAX_LEVEL; i++) {
 			next[i] = AtomicMarkableReference(NULL, false);
@@ -212,8 +213,13 @@ public:
 						snip = pred->CompareAndSet(level, curr, succ, false, false);
 						if (!snip) goto retry;
 						//	if (level == bottomLevel) freelist.free(curr);
-						if (level == bottomLevel) {
+						int ref_count = curr->ref_count.fetch_sub(1, memory_order_relaxed);
+						if (ref_count == 1) {
 							retire(curr);
+						}
+						else if (ref_count == 0) {
+							fprintf(stderr, "Node's ref count was 0\n");
+							exit(-1);
 						}
 						curr = GetReference(pred->next[level]);
 						succ = curr->next[level];
@@ -252,15 +258,16 @@ public:
 		int bottomLevel = 0;
 		LFSKNode* preds[MAX_LEVEL];
 		LFSKNode* succs[MAX_LEVEL];
+		LFSKNode* newNode = new LFSKNode;
 		while (true) {
 			bool found = Find(x, preds, succs);
 			// 대상 키를 갖는 표시되지 않은 노드를 찾으면 키가 이미 집합에 있으므로 false 반환
 			if (found) {
 				end_op();
+				delete newNode;
 				return false;
 			}
 			else {
-				LFSKNode* newNode = new LFSKNode;
 				newNode->InitNode(x, topLevel);
 
 				for (int level = bottomLevel; level <= topLevel; level++) {
@@ -286,17 +293,13 @@ public:
 						succ = GetReference(succs[level]);
 						// 최하층 보다 높은 층들을 차례대로 연결
 						// 연결을 성공할경우 다음단계로 넘어간다
-						auto new_next = newNode->next[level];
-						if (true == newNode->CompareAndSet(level, new_next, succ, false, false)) {
-							if (true == pred->CompareAndSet(level, succ, newNode, false, false))
-								break;
-							Find(x, preds, succs);
+						while (true) {
+							bool mark;
+							LFSKNode* t = Get(newNode->next[level], &mark);
+							if (true == newNode->CompareAndSet(level, t, succ, mark, mark)) break;
 						}
-						else {
-							Find(x, preds, succs);
-							end_op();
-							return true;
-						}
+						if (pred->CompareAndSet(level, succ, newNode, false, false)) break;
+						Find(x, preds, succs);
 					}
 				}
 
