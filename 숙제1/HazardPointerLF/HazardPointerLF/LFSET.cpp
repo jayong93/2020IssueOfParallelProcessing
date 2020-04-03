@@ -6,6 +6,7 @@
 #include <mutex>
 #include <memory>
 #include <atomic>
+#include <algorithm>
 #include "hazard_ptr.h"
 
 using namespace std;
@@ -114,8 +115,8 @@ public:
 	retry:
 		LFNODE* pr = &head;
 		LFNODE* cu;
+		hp1->set_hp(pr);
 		while (true) {
-			hp1->set_hp(pr);
 			do {
 				cu = pr->GetNext();
 				hp2->set_hp(cu);
@@ -150,7 +151,16 @@ public:
 				}
 
 				hp_list.retire(cu, retired_list);
-				hp2->set_hp(su);
+				/*
+				  swap을 하지 않고, 그냥 hp3의 값을 hp2에 넣는 식으로 구현하면 crash 가능.
+				  다른 thread가 scan도중 hp2에서 curr를 읽고 잠깐 멈춘 사이에
+				  여기 Find에서 hp2에 hp3의 값(succ)를 넣고 hp3를 succ->next로 바꾼다면
+				  scan중인 그 thread가 다시 실행됐을 때, 보호되어야 하는 succ 포인터 값을 읽을 수 없다.
+
+				  하지만 swap하면 hp의 값이 바뀌는 것이 아니라 진짜 hp를 가리키는 포인터 변수끼리 바뀌는 것이므로
+				  더 이상 필요 없는 hp를 재활용 하는 방식과 비슷해진다.
+				*/
+				swap(hp2, hp3);
 
 				cu = su;
 				removed = cu->IsMarked();
@@ -162,6 +172,7 @@ public:
 				return make_pair(std::move(hp1), std::move(hp2));
 			}
 			pr = cu;
+			swap(hp1, hp2);
 		}
 		return make_pair(std::move(hp1), std::move(hp2));
 	}
@@ -213,13 +224,13 @@ public:
 		LFNODE* curr = &head;
 		LFNODE* next;
 
+		hp1->set_hp(curr);
 		while (curr->key < x) {
-			hp1->set_hp(curr);
 			do {
 				next = curr->GetNext();
 				hp2->set_hp(next);
-				//mfence;
 			} while (curr->GetNext() != next);
+
 			if (true == curr->IsMarked()) {
 				LFNODE* pred;
 				auto [hp_pred, hp_curr] = Find(x, &pred, &curr);
@@ -228,6 +239,7 @@ public:
 				break;
 			}
 			curr = next;
+			swap(hp1, hp2);
 		}
 
 		auto key = curr->key;
