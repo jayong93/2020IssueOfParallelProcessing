@@ -10,7 +10,7 @@
 using namespace std;
 using namespace chrono;
 
-static const int NUM_TEST = 4000000;
+static const int NUM_TEST = 40000000;
 static const int RANGE = 1000;
 static const int MAX_LEVEL = 10;
 constexpr unsigned MAX_THREAD = 32;
@@ -129,7 +129,7 @@ public:
 	}
 
 	// 일반노드에 관한 생성자
-	LFSKNode(int x, int height) : ref_count{ height } {
+	LFSKNode(int x, int height) : ref_count{ height + 1 } {
 		key = x;
 		for (int i = 0; i < MAX_LEVEL; i++) {
 			next[i] = AtomicMarkableReference(NULL, false);
@@ -151,6 +151,7 @@ public:
 			next[i] = AtomicMarkableReference(NULL, false);
 		}
 		topLevel = top;
+		ref_count.store(top + 1, memory_order_relaxed);
 	}
 
 	bool CompareAndSet(int level, LFSKNode* old_node, LFSKNode* next_node, bool old_mark, bool next_mark) {
@@ -328,6 +329,7 @@ public:
 					}
 				}
 
+				Find(x, preds, succs);
 				//모든 층에서 연결되었으면 true반환
 				end_op();
 				return true;
