@@ -10,7 +10,7 @@
 using namespace std;
 using namespace chrono;
 
-static const int NUM_TEST = 40000000;
+static const int NUM_TEST = 4000000;
 static const int RANGE = 1000;
 static const int MAX_LEVEL = 10;
 constexpr unsigned MAX_THREAD = 32;
@@ -33,15 +33,15 @@ constexpr unsigned epoch_freq = 20;
 constexpr unsigned empty_freq = 10;
 
 void retire(LFSKNode* node) {
-	retired_list.emplace_back(node, g_epoch.load());
+	retired_list.emplace_back(node, g_epoch.load(memory_order_relaxed));
 	++counter;
 	if (counter % epoch_freq == 0) {
-		g_epoch.fetch_add(1);
+		g_epoch.fetch_add(1, memory_order_relaxed);
 	}
 	if (counter % empty_freq == 0) {
 		auto min_epoch = ULLONG_MAX;
 		for (auto& epoch : t_epochs) {
-			auto e = epoch->load();
+			auto e = epoch->load(memory_order_relaxed);
 			if (min_epoch > e) {
 				min_epoch = e;
 			}
@@ -59,11 +59,11 @@ void retire(LFSKNode* node) {
 }
 
 void start_op() {
-	t_epochs[tid]->store(g_epoch.load());
+	t_epochs[tid]->store(g_epoch.load(memory_order_relaxed), memory_order_relaxed);
 }
 
 void end_op() {
-	t_epochs[tid]->store(ULLONG_MAX);
+	t_epochs[tid]->store(ULLONG_MAX, memory_order_relaxed);
 }
 
 bool Marked(LFSKNode* curr)
