@@ -114,7 +114,7 @@ public:
 	atomic_uint ref_count;
 
 	// 보초노드에 관한 생성자
-	LFSKNode() : ref_count{MAX_LEVEL} {
+	LFSKNode() : ref_count{ MAX_LEVEL } {
 		for (int i = 0; i < MAX_LEVEL; i++) {
 			next[i] = AtomicMarkableReference(NULL, false);
 		}
@@ -300,10 +300,34 @@ public:
 						}
 						if (pred->CompareAndSet(level, succ, newNode, false, false)) break;
 						Find(x, preds, succs);
+
+						/*
+						  아래는 이전에 시도했던 해결법(by 소윤)인데 문제가 있다.
+						  Add thread가 첫번째 CAS(marking이 됐는지 확인하는 CAS)에 성공한 직후 잠깐 멈췄을 때,
+						  Remove thread가 이 노드의 모든 층에 marking하고 Find를 호출해서 retire까지 했을 수 있다.
+						  그리고 다시 깨어난 Add thread가 두번째 CAS(실제 자료구조에 newNode를 삽입하는 CAS)에 성공할 수 있다.
+						  이 level에서는 pred의 next가 바뀌지 않았을 수도 있기 때문.
+						  그렇게 되면 뒷처리를 위해 Add thread가 Find를 호출하기 전에 다른 thread가 새로운 epoch으로
+						  method를 시작해서 이미 retire된 이 노드를 볼 수 있고, 그 포인터가 local하게 저장됐을 수도 있다.
+						  그러면 이미 늦어서 Add thread가 Find를 호출해서 뒷정리하고 끝내면 이 노드의 메모리는 할당 해제된다.
+						  즉, 새로운 epoch으로 method를 시작한 thread는 delete된 메모리 주소를 참조할 수 있다.
+						*/
+
+						//auto new_next = newNode->next[level];
+						//if (true == newNode->CompareAndSet(level, new_next, succ, false, false)) {
+						//	if (true == pred->CompareAndSet(level, succ, newNode, false, false))
+						//		break;
+						//	Find(x, preds, succs);
+						//}
+						//else {
+						//	Find(x, preds, succs);
+						//	end_op();
+						//	return true;
+						//}
+
 					}
 				}
 
-				Find(x, preds, succs);
 				//모든 층에서 연결되었으면 true반환
 				end_op();
 				return true;
