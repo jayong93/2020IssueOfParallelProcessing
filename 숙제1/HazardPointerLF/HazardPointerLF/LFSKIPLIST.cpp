@@ -499,6 +499,6 @@ int main()
 		my_set.Dump();
 
 		cout << num_thread << " Threads,  Time = ";
-		cout << duration_cast<milliseconds>(du).count() << " ms\n";
+		cout << duration_cast<milliseconds>(du).count() << " ms" << endl;
 	}
 }

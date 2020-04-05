@@ -161,7 +161,7 @@ int main()
 		my_queue.display20();
 		//my_queue.recycle_freelist();
 		cout << n << "Threads,  ";
-		cout << ",  Duration : " << duration_cast<milliseconds>(d).count() << " msecs.\n";
+		cout << ",  Duration : " << duration_cast<milliseconds>(d).count() << " msecs." << endl;
 	}
 }
 
