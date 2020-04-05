@@ -139,8 +139,8 @@ public:
 thread_local vector<LFSKNode*> retired_list;
 HazardPtrList<LFSKNode> hp_list;
 using HP = HazardPtrGuard<LFSKNode>;
-thread_local array<HP, 10> level_pred_hps;
-thread_local array<HP, 10> level_succ_hps;
+thread_local array<HP, MAX_LEVEL> level_pred_hps;
+thread_local array<HP, MAX_LEVEL> level_succ_hps;
 thread_local array<HP, 3> local_hps;
 
 class LFSKSET
@@ -385,51 +385,45 @@ public:
 
 	bool Contains(int x)
 	{
-		auto hp_pred = hp_list.acq_guard();
-		auto hp_curr = hp_list.acq_guard();
-		auto hp_succ = hp_list.acq_guard();
-		auto hp_temp = hp_list.acq_guard();
 		int bottomLevel = 0;
 		bool marked = false;
 		LFSKNode* pred = head;
 		LFSKNode* curr = NULL;
 		LFSKNode* succ = NULL;
-		hp_pred->set_hp(pred);
+		local_hps[0]->set_hp(pred);
 
 		for (int level = MAX_LEVEL - 1; level >= bottomLevel; level--) {
 			do {
 				curr = GetReference(pred->next[level]);
-				hp_curr->set_hp(curr);
+				local_hps[1]->set_hp(curr);
 			} while (curr != GetReference(pred->next[level]));
 			if (true == Marked(pred->next[level])) {
-				auto found = Find(x, nullptr, nullptr);
-				return found;
+				return Find(x, nullptr, nullptr);
 			}
 
 			while (true) {
 				do {
 					succ = curr->next[level];
-					hp_succ->set_hp(GetReference(succ));
+					local_hps[2]->set_hp(GetReference(succ));
 				} while (succ != curr->next[level]);
 				while (Marked(succ)) {
 					if (pred->next[level] != GetReference(succ)) {
-						auto found = Find(x, nullptr, nullptr);
-						return found;
+						return Find(x, nullptr, nullptr);
 					}
 
 					curr = GetReference(succ);
-					hp_curr->set_hp(curr);
+					swap(local_hps[1], local_hps[2]);
 
 					do {
 						succ = curr->next[level];
-						hp_succ->set_hp(GetReference(succ));
+						local_hps[2]->set_hp(GetReference(succ));
 					} while (succ != curr->next[level]);
 				}
 				if (curr->key < x) {
 					pred = curr;
-					swap(hp_pred, hp_curr);
+					swap(local_hps[0], local_hps[1]);
 					curr = GetReference(succ);
-					swap(hp_curr, hp_succ);
+					swap(local_hps[1], local_hps[2]);
 				}
 				else {
 					break;
