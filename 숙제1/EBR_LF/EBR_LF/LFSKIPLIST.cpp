@@ -214,6 +214,20 @@ public:
 						snip = pred->CompareAndSet(level, curr, succ, false, false);
 						if (!snip) goto retry;
 						//	if (level == bottomLevel) freelist.free(curr);
+						/*
+						 * reference counting 방식이 아니라면 오류가 발생할 수 밖에 없다
+						 * 만약
+						 * 1. A thread가 x값에 대해 Add하려고 시도하면서 Find 호출 도중 level 1에서
+						 * 	pred와 succ(x 값을 가진 노드)를 찾음
+						 * 2. A thread가 잠시 멈춘 사이에 B thread가 x 노드에 대해 Remove를 하면서
+						 * 	전부 marking 하고 정지.
+						 * 3. A thread가 다시 깨어나 level 0 에서 x 노드를 찾는데, marking 된 것을
+						 * 	확인하고 CAS로 자료구조에서 제거하고 retire까지 시킴
+						 * 4. 그 뒤 A thread가 이어서 x 값에 대한 새로운 노드를 자료구조에 끼워 넣는데
+						 * 	level 1에서는 retire된 x 노드의 포인터가 아직 남아있고, 이 주소가 새로운
+						 * 	x 노드의 next로 설정됨.
+						 * 5. 결과적으로 retire된 노드의 주소값이 아직 자료구조에 남은 상태로 존재하게 됨.
+						 */
 						int ref_count = curr->ref_count.fetch_sub(1, memory_order_relaxed);
 						if (ref_count == 1) {
 							retire(curr);
