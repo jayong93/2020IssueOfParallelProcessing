@@ -24,6 +24,7 @@ private:
 
 template <typename T>
 struct HazardPtrGuard {
+	HazardPtrGuard<T>() : ptr{ nullptr } {}
 	HazardPtrGuard<T>(HazardPtr<T>* ptr) : ptr{ ptr } {}
 	HazardPtrGuard<T>(const HazardPtrGuard<T>&) = delete;
 	HazardPtrGuard<T>& operator=(const HazardPtrGuard<T>&) = delete;
@@ -105,6 +106,7 @@ template<typename T>
 inline void HazardPtrList<T>::scan(std::vector<T*>& retired_list)
 {
 	std::unordered_set<T*> hazard_pointers;
+	hazard_pointers.reserve(this->size.load(std::memory_order_relaxed));
 	for (HazardPtr<T>* ptr = head; ptr != nullptr; ptr = ptr->next) {
 		T* hp{ ptr->get_hp() };
 		if (hp != nullptr) hazard_pointers.emplace(hp);

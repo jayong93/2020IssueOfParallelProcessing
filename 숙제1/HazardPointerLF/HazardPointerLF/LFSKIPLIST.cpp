@@ -7,6 +7,7 @@
 #include <memory>
 #include <atomic>
 #include <tuple>
+#include <array>
 #include "hazard_ptr.h"
 
 using namespace std;
@@ -138,6 +139,9 @@ public:
 thread_local vector<LFSKNode*> retired_list;
 HazardPtrList<LFSKNode> hp_list;
 using HP = HazardPtrGuard<LFSKNode>;
+thread_local array<HP, 10> level_pred_hps;
+thread_local array<HP, 10> level_succ_hps;
+thread_local array<HP, 3> local_hps;
 
 class LFSKSET
 {
@@ -170,7 +174,7 @@ public:
 		}
 	}
 
-	tuple<bool, vector<HP>> Find(int x, LFSKNode* preds[], LFSKNode* succs[])
+	bool Find(int x, LFSKNode* preds[], LFSKNode* succs[])
 	{
 		int bottomLevel = 0;
 		bool marked = false;
@@ -179,20 +183,15 @@ public:
 		LFSKNode* curr = NULL;
 		LFSKNode* succ = NULL;
 
-		auto hp1 = hp_list.acq_guard();
-		auto hp2 = hp_list.acq_guard();
-		auto hp3 = hp_list.acq_guard();
-		vector<HP> hp_vec;
 	retry:
-		hp_vec.clear();
 		while (true) {
 			pred = head;
-			hp1->set_hp(pred);
+			local_hps[0]->set_hp(head);
 			for (int level = MAX_LEVEL - 1; level >= bottomLevel; level--) {
 				while (true) {
 					do {
 						curr = GetReference(pred->next[level]);
-						hp2->set_hp(curr);
+						local_hps[1]->set_hp(curr);
 					} while (curr != GetReference(pred->next[level]));
 
 					if (true == Marked(pred->next[level])) {
@@ -201,7 +200,7 @@ public:
 
 					do {
 						succ = curr->next[level];
-						hp3->set_hp(GetReference(succ));
+						local_hps[2]->set_hp(GetReference(succ));
 					} while (curr->next[level] != succ);
 
 					while (Marked(succ)) { //표시되었다면 제거
@@ -219,11 +218,11 @@ public:
 						}
 
 						curr = GetReference(succ);
-						swap(hp2, hp3);
+						swap(local_hps[1], local_hps[2]);
 
 						do {
 							succ = curr->next[level];
-							hp3->set_hp(GetReference(succ));
+							local_hps[2]->set_hp(GetReference(succ));
 						} while (curr->next[level] != succ);
 					}
 
@@ -232,7 +231,7 @@ public:
 					if (curr->key < x)
 					{
 						pred = curr;
-						swap(hp1, hp2);
+						swap(local_hps[0], local_hps[1]);
 
 						// 키값이 그렇지 않은 경우
 						// curr키는 대상키보다 같거나 큰것이므로 pred의 키값이
@@ -246,19 +245,15 @@ public:
 
 				if (preds != nullptr) {
 					preds[level] = pred;
-					auto pred_hp = hp_list.acq_guard();
-					pred_hp->set_hp(pred);
-					hp_vec.emplace_back(move(pred_hp));
+					level_pred_hps[level]->set_hp(pred);
 				}
 
 				if (succs != nullptr) {
 					succs[level] = curr;
-					auto succ_hp = hp_list.acq_guard();
-					succ_hp->set_hp(curr);
-					hp_vec.emplace_back(move(succ_hp));
+					level_succ_hps[level]->set_hp(succ);
 				}
 			}
-			return make_tuple(curr->key == x, move(hp_vec));
+			return curr->key == x;
 		}
 	}
 
@@ -282,7 +277,7 @@ public:
 
 		while (true)
 		{
-			auto [found, hp_vec] = Find(x, preds, succs);
+			auto found = Find(x, preds, succs);
 			// 대상 키를 갖는 표시되지 않은 노드를 찾으면 키가 이미 집합에 있으므로 false 반환
 			if (found)
 			{
@@ -325,8 +320,7 @@ public:
 							if (true == newNode->CompareAndSet(level, t, succ, mark, mark)) break;
 						}
 						if (pred->CompareAndSet(level, succ, newNode, false, false)) break;
-						auto [_, hv] = Find(x, preds, succs);
-						hp_vec = move(hv);
+						Find(x, preds, succs);
 					}
 				}
 
@@ -345,7 +339,7 @@ public:
 
 		while (true)
 		{
-			auto [found, hp_vec] = Find(x, preds, succs);
+			auto found = Find(x, preds, succs);
 			if (!found)
 			{
 				//최하층에 제거하려는 노드가 없거나, 짝이 맞는 키를 갖는 노드가 표시 되어 있다면 false반환
@@ -408,7 +402,7 @@ public:
 				hp_curr->set_hp(curr);
 			} while (curr != GetReference(pred->next[level]));
 			if (true == Marked(pred->next[level])) {
-				auto [found, _] = Find(x, nullptr, nullptr);
+				auto found = Find(x, nullptr, nullptr);
 				return found;
 			}
 
@@ -419,7 +413,7 @@ public:
 				} while (succ != curr->next[level]);
 				while (Marked(succ)) {
 					if (pred->next[level] != GetReference(succ)) {
-						auto [found, _] = Find(x, nullptr, nullptr);
+						auto found = Find(x, nullptr, nullptr);
 						return found;
 					}
 
@@ -463,6 +457,16 @@ LFSKSET my_set;
 
 void benchmark(int num_thread)
 {
+	for (auto& hp : local_hps) {
+		hp = hp_list.acq_guard();
+	}
+	for (auto& hp : level_pred_hps) {
+		hp = hp_list.acq_guard();
+	}
+	for (auto& hp : level_succ_hps) {
+		hp = hp_list.acq_guard();
+	}
+
 	for (int i = 0; i < NUM_TEST / num_thread; ++i)
 	{
 		//	if (0 == i % 100000) cout << ".";
@@ -487,24 +491,20 @@ void benchmark(int num_thread)
 int main()
 {
 	vector<thread> worker;
-	for (size_t i = 0; i < 100; i++)
+	for (int num_thread = 1; num_thread <= 32; num_thread *= 2)
 	{
-		for (int num_thread = 1; num_thread <= 32; num_thread *= 2)
-		{
-			my_set.Init();
-			worker.clear();
+		my_set.Init();
+		worker.clear();
 
-			auto start_t = high_resolution_clock::now();
-			for (int i = 0; i < num_thread; ++i)
-				worker.push_back(thread{ benchmark, num_thread });
-			for (auto& th : worker)
-				th.join();
-			auto du = high_resolution_clock::now() - start_t;
-			my_set.Dump();
+		auto start_t = high_resolution_clock::now();
+		for (int i = 0; i < num_thread; ++i)
+			worker.push_back(thread{ benchmark, num_thread });
+		for (auto& th : worker)
+			th.join();
+		auto du = high_resolution_clock::now() - start_t;
+		my_set.Dump();
 
-			cout << num_thread << " Threads,  Time = ";
-			cout << duration_cast<milliseconds>(du).count() << " ms\n";
-		}
-
+		cout << num_thread << " Threads,  Time = ";
+		cout << duration_cast<milliseconds>(du).count() << " ms\n";
 	}
 }
