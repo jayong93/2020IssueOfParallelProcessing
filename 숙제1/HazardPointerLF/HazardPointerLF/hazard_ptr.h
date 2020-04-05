@@ -105,17 +105,19 @@ inline void HazardPtrList<T>::release(HazardPtr<T>* h_ptr)
 template<typename T>
 inline void HazardPtrList<T>::scan(std::vector<T*>& retired_list)
 {
-	std::unordered_set<T*> hazard_pointers;
+	std::vector<T*> hazard_pointers;
 	hazard_pointers.reserve(this->size.load(std::memory_order_relaxed));
 	for (HazardPtr<T>* ptr = head; ptr != nullptr; ptr = ptr->next) {
 		T* hp{ ptr->get_hp() };
-		if (hp != nullptr) hazard_pointers.emplace(hp);
+		if (hp != nullptr) hazard_pointers.push_back(hp);
 	}
 
-	auto it_to_remove = std::remove_if(retired_list.begin(), retired_list.end(), [&](auto hp) {
-		if (hazard_pointers.find(hp) == hazard_pointers.end()) {
+	std::sort(hazard_pointers.begin(), hazard_pointers.end());
+
+	auto it_to_remove = std::remove_if(retired_list.begin(), retired_list.end(), [&](auto retired) {
+		if (!std::binary_search(hazard_pointers.begin(), hazard_pointers.end(), retired)) {
 			//printf("INFO: Node has been deleted\n");
-			delete hp;
+			delete retired;
 			return true;
 		}
 		return false;
