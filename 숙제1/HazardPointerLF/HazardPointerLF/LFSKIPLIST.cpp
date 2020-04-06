@@ -406,19 +406,11 @@ public:
 					succ = curr->next[level];
 					local_hps[2]->set_hp(GetReference(succ));
 				} while (succ != curr->next[level]);
-				while (Marked(succ)) {
-					if (pred->next[level] != GetReference(succ)) {
-						return Find(x, nullptr, nullptr);
-					}
 
-					curr = GetReference(succ);
-					swap(local_hps[1], local_hps[2]);
-
-					do {
-						succ = curr->next[level];
-						local_hps[2]->set_hp(GetReference(succ));
-					} while (succ != curr->next[level]);
+				if (true == Marked(succ)) {
+					return Find(x, nullptr, nullptr);
 				}
+
 				if (curr->key < x) {
 					pred = curr;
 					swap(local_hps[0], local_hps[1]);
