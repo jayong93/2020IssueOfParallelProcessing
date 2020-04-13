@@ -168,7 +168,7 @@ struct Node {
 	Invoc invoc;
 	atomic<Node*> decide_next;
 	unsigned int seq;
-	Node* next;
+	atomic<Node*> next;
 
 	Node(Invoc&& invoc) : invoc{ move(invoc) }, decide_next{ nullptr }, seq{ 0 }, next{ nullptr } {}
 	static Node* max(const vector<Node*>& nodes) {
@@ -199,9 +199,11 @@ struct Object {
 	}
 };
 
+constexpr int RECYCLE_RATE = 100;
+
 class OLFUniversal {
 public:
-	OLFUniversal(int capacity) : capacity{ capacity } {
+	OLFUniversal(int capacity) : capacity{ capacity }, invoke_num{ 0 } {
 		Invoc invoc{ Func::None };
 		tail = new Node(move(invoc));
 		tail->seq = 1;
@@ -211,30 +213,14 @@ public:
 	}
 	~OLFUniversal()
 	{
-		Node* cur = tail->next;
+		Node* cur = tail->next.load(memory_order_relaxed);
 		while (cur->next != nullptr) {
 			Node* del = cur;
-			cur = cur->next;
+			cur = cur->next.load(memory_order_relaxed);
 			delete del;
 		}
 		delete cur;
-	}
-
-	void Init() {
-		Node* cur = tail->next;
-		while (cur->next != nullptr) {
-			Node* del = cur;
-			cur = cur->next;
-			delete del;
-		}
-		delete cur;
-
-		head.clear();
-		head.resize(capacity, tail);
-		last_nodes.clear();
-		last_nodes.resize(capacity, tail);
-		objects.clear();
-		objects.resize(capacity);
+		delete tail;
 	}
 
 	Object& current_obj() {
@@ -261,7 +247,7 @@ public:
 			Node* after = nullptr;
 			if (before->decide_next.compare_exchange_strong(after, prefer))
 				after = prefer;
-			before->next = after;
+			before->next.store(after, memory_order_relaxed);
 			after->seq = before->seq + 1;
 			head[thread_id] = after;
 		}
@@ -269,15 +255,18 @@ public:
 		auto& last_node = last_nodes[thread_id];
 		auto& last_obj = objects[thread_id];
 
-		if (last_node == nullptr)
-			last_node = tail->next;
-		else
-			last_node = last_node->next;
+		last_node = last_node->next.load(memory_order_relaxed);
 		while (last_node != prefer)
 		{
 			last_obj.apply(last_node->invoc);
-			last_node = last_node->next;
+			last_node = last_node->next.load(memory_order_relaxed);
 		}
+
+		auto invoked_num = invoke_num.fetch_add(1) + 1;
+		if (invoked_num % RECYCLE_RATE == 0) {
+			recycle();
+		}
+
 		return last_obj.apply(last_node->invoc);
 	}
 
@@ -290,18 +279,40 @@ public:
 			return last_obj.apply(invoc);
 		}
 
-		if (last_node == nullptr)
-			last_node = tail->next;
-		else
-			last_node = last_node->next;
+		last_node = last_node->next.load(memory_order_relaxed);
 
 		while (last_node != old_head) {
 			last_obj.apply(last_node->invoc);
-			last_node = last_node->next;
+			last_node = last_node->next.load(memory_order_relaxed);
 		}
 		last_obj.apply(last_node->invoc);
 
 		return last_obj.apply(invoc);
+	}
+
+	void recycle() {
+		Node* min = last_nodes[0];
+		for (auto i = 1; i < last_nodes.size(); ++i) {
+			if (last_nodes[i]->seq < min->seq) {
+				min = last_nodes[i];
+			}
+		}
+		for (auto i = 0; i < head.size(); ++i) {
+			if (head[i]->seq < min->seq) {
+				min = head[i];
+			}
+		}
+		
+		if (min == tail) { return; }
+
+		auto old_next = tail->next.load(memory_order_relaxed);
+		if (tail->next.compare_exchange_strong(old_next, min)) {
+			while (old_next != min) {
+				auto tmp = old_next;
+				old_next = old_next->next.load(memory_order_relaxed);
+				delete tmp;
+			}
+		}
 	}
 private:
 	vector<Node*> head;
@@ -309,6 +320,7 @@ private:
 	vector<Object> objects;
 	Node* tail;
 	int capacity;
+	atomic_ullong invoke_num;
 };
 
 const auto NUM_TEST = 4000000;
