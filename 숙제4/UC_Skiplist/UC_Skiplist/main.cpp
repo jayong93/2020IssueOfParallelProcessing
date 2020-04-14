@@ -308,12 +308,11 @@ public:
 		if (min == tail) { return; }
 
 		auto old_next = tail->next.load(memory_order_relaxed);
-		if (tail->next.compare_exchange_strong(old_next, min)) {
-			while (old_next != min) {
-				auto tmp = old_next;
-				old_next = old_next->next.load(memory_order_relaxed);
-				delete tmp;
-			}
+		tail->next.store(min, memory_order_relaxed);
+		while (old_next != min) {
+			auto tmp = old_next;
+			old_next = old_next->next.load(memory_order_relaxed);
+			delete tmp;
 		}
 	}
 private:
