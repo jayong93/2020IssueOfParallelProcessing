@@ -201,7 +201,6 @@ struct Invoc
 	int arg;
 
 	Invoc(Func func, int arg = 0) : func{func}, arg{arg} {}
-	Invoc(Invoc &&other) noexcept : func{other.func}, arg{other.arg} {}
 
 	bool is_read_only() const
 	{
@@ -217,7 +216,7 @@ struct Node
 	uint64_t seq;
 	atomic<Node *> next;
 
-	Node(Invoc &&invoc) : invoc{move(invoc)}, seq{0}, next{nullptr} {}
+	Node(const Invoc &invoc) : invoc{invoc}, seq{0}, next{nullptr} {}
 };
 
 struct Object
@@ -313,7 +312,7 @@ public:
 		return nullopt;
 	}
 
-	Response update_local_obj(const Node &prefer, int thread_id)
+	optional<Response> update_local_obj(const Node &prefer, int thread_id)
 	{
 		auto ret = get_max_comb<unique_lock<shared_mutex>>(true, [](auto &_) { return true; });
 		auto &[lg, comb] = *ret;
@@ -321,49 +320,61 @@ public:
 		auto &last_node = comb.last_node;
 		auto &last_obj = comb.obj;
 
+		if (last_node->seq >= prefer.seq) {
+			return nullopt;
+		}
 		last_node = last_node->next.load(memory_order_relaxed);
-		while (last_node != &prefer)
+		while (last_node->seq < prefer.seq)
 		{
 			last_obj.apply(last_node->invoc);
 			last_node = last_node->next.load(memory_order_relaxed);
 		}
 
-		if (invoke_num.load(memory_order_relaxed) < RECYCLE_RATE)
-		{
-			if (invoke_num.fetch_add(1, memory_order_relaxed) + 1 == RECYCLE_RATE)
-			{
-				recycle();
-				invoke_num.store(0, memory_order_relaxed);
-			}
-		}
+		// if (invoke_num.load(memory_order_relaxed) < RECYCLE_RATE)
+		// {
+		// 	if (invoke_num.fetch_add(1, memory_order_relaxed) + 1 == RECYCLE_RATE)
+		// 	{
+		// 		recycle();
+		// 		invoke_num.store(0, memory_order_relaxed);
+		// 	}
+		// }
 
 		return last_obj.apply(last_node->invoc);
 	}
 
-	Response apply(Invoc &&invoc, int thread_id)
+	optional<Response> apply(const Invoc &invoc, int thread_id)
 	{
 		if (invoc.is_read_only())
 		{
-			optional<Response> ret_val = do_read_only(move(invoc), thread_id);
+			optional<Response> ret_val = do_read_only(invoc, thread_id);
 			if (ret_val)
 			{
-				return *ret_val;
+				return ret_val;
 			}
 		}
 
-		Node *old_head = head.load(memory_order_relaxed);
-		Node *prefer = new Node(move(invoc));
+		Node *prefer = new Node(invoc);
 		while (true)
 		{
+			Node *old_head = head.load(memory_order_relaxed);
+			Node *old_next = old_head->next.load(memory_order_relaxed);
+			if (old_next != nullptr){
+				head.compare_exchange_strong(old_head, old_next);
+				continue;
+			}
+
 			prefer->seq = old_head->seq + 1;
-			if (head.compare_exchange_strong(old_head, prefer))
+			if (true == old_head->next.compare_exchange_strong(old_next, prefer))
+			{
+				head.compare_exchange_strong(old_head, prefer);
 				break;
+			}
 		}
 
 		return update_local_obj(*prefer, thread_id);
 	}
 
-	optional<Response> do_read_only(Invoc &&invoc, int thread_id)
+	optional<Response> do_read_only(const Invoc &invoc, int thread_id)
 	{
 		auto old_head = head.load(memory_order_relaxed);
 		auto old_seq = old_head->seq;
@@ -382,7 +393,7 @@ public:
 		Node *min = combined_list[0]->last_node;
 		for (auto i = 1; i < combined_list.size(); ++i)
 		{
-			auto &combined = combined_list[i];
+			const auto &combined = combined_list[i];
 			if (combined->last_node->seq < min->seq)
 			{
 				min = combined->last_node;
