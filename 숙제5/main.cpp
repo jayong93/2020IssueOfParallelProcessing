@@ -11,6 +11,22 @@
 using namespace std;
 using namespace std::chrono;
 
+unsigned long fast_rand(void)
+{ //period 2^96-1
+	static thread_local unsigned long x = 123456789, y = 362436069, z = 521288629;
+	unsigned long t;
+	x ^= x << 16;
+	x ^= x >> 5;
+	x ^= x << 1;
+
+	t = x;
+	x = y;
+	y = z;
+	z = t ^ x ^ y;
+
+	return z;
+}
+
 constexpr int MAXHEIGHT = 10;
 class SLNODE
 {
@@ -105,7 +121,7 @@ public:
 		else
 		{
 			int height = 1;
-			while (rand() % 2 == 0)
+			while (fast_rand() % 2 == 0)
 			{
 				height++;
 				if (MAXHEIGHT == height)
@@ -244,8 +260,9 @@ public:
 		tail = new Node(move(invoc));
 		tail->seq = 1;
 		head.store(tail, memory_order_relaxed);
-		for(auto i=0;i<capacity;++i) {
-		combined_list.emplace_back(new Combined(*tail));
+		for (auto i = 0; i < capacity; ++i)
+		{
+			combined_list.emplace_back(new Combined(*tail));
 		}
 	}
 	~OLFUniversal()
@@ -354,7 +371,7 @@ public:
 		auto ret = get_max_comb<shared_lock<shared_mutex>>(false, [old_seq](const Combined &c) { return c.last_node->seq == old_seq; });
 		if (ret)
 		{
-			auto& [lg, comb] = *ret;
+			auto &[lg, comb] = *ret;
 			return comb.obj.apply(invoc);
 		}
 		return nullopt;
@@ -390,7 +407,7 @@ public:
 private:
 	// 가장 최근 Node
 	atomic<Node *> head;
-	vector<Combined*> combined_list;
+	vector<Combined *> combined_list;
 	// 가장 오래된 Node
 	Node *tail;
 	int capacity;
@@ -405,18 +422,18 @@ void ThreadFunc(OLFUniversal *list, int num_thread, int thread_id)
 
 	for (int i = 0; i < NUM_TEST / num_thread; i++)
 	{
-		switch (rand() % 3)
+		switch (fast_rand() % 3)
 		{
 		case 0:
-			key = rand() % KEY_RANGE;
+			key = fast_rand() % KEY_RANGE;
 			list->apply(Invoc(Func::Add, key), thread_id);
 			break;
 		case 1:
-			key = rand() % KEY_RANGE;
+			key = fast_rand() % KEY_RANGE;
 			list->apply(Invoc(Func::Remove, key), thread_id);
 			break;
 		case 2:
-			key = rand() % KEY_RANGE;
+			key = fast_rand() % KEY_RANGE;
 			list->apply(Invoc(Func::Contains, key), thread_id);
 			break;
 		default:
