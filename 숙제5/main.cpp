@@ -461,5 +461,4 @@ int main()
 		cout << n << "Threads,  ";
 		cout << ",  Duration : " << duration_cast<milliseconds>(d).count() << " msecs." << endl;
 	}
-	system("pause");
 }
