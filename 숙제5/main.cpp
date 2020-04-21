@@ -68,8 +68,12 @@ class SKLIST
 {
 	struct CopyingInfo
 	{
-		SLNODE *org, *curr;
+		const SLNODE *org;
+		SLNODE *curr;
 		int level;
+
+		CopyingInfo() {}
+		CopyingInfo(const SLNODE *org, SLNODE *curr, int level) : org{org}, curr{curr}, level{level} {}
 	};
 
 	SLNODE head, tail;
@@ -91,11 +95,15 @@ public:
 	{
 		stack<CopyingInfo> nodes_unlinked;
 		nodes_unlinked.emplace(&other.head, &this->head, MAXHEIGHT - 1);
-		copy_and_link(nodes_unlinked);
+		while (nodes_unlinked.empty() == false)
+		{
+			copy_and_link(nodes_unlinked);
+		}
 	}
-	SKLIST(SKLIST &&other): head{move(other.head)}, tail{move(other.tail)}
+	SKLIST(SKLIST &&other) : head{move(other.head)}, tail{move(other.tail)}
 	{
-		for(auto& p : other.head.next) {
+		for (auto &p : other.head.next)
+		{
 			p = &other.tail;
 		}
 	}
@@ -106,62 +114,61 @@ public:
 		// tuple<original_node, current_node, highest_unlinked_level>
 		stack<CopyingInfo> nodes_unlinked;
 		nodes_unlinked.emplace(&other.head, &this->head, MAXHEIGHT - 1);
-		copy_and_link(nodes_unlinked);
+		while (nodes_unlinked.empty() == false)
+		{
+			copy_and_link(nodes_unlinked);
+		}
+		return *this;
 	}
-	SKLIST& operator=(SKLIST&& other) {
+	SKLIST &operator=(SKLIST &&other)
+	{
 		this->head = move(other.head);
 		this->tail = move(other.tail);
-		for(auto& p : other.head.next) {
+		for (auto &p : other.head.next)
+		{
 			p = &other.tail;
 		}
+		return *this;
 	}
 
 	void copy_and_link(stack<CopyingInfo> &jobs)
 	{
-		if (jobs.empty())
-			return;
+		auto &job = jobs.top();
+		const auto org = job.org;
+		const auto curr = job.curr;
+		const auto curr_level = job.level;
 
-		auto &[org, curr, level] = jobs.top();
-		auto curr_level = level;
-		if (org->next[curr_level]->next[curr_level] == nullptr)
+		if (curr_level != 0)
+			job.level--;
+		else
+			jobs.pop();
+
+		if (org->next[curr_level] == nullptr)
+		{
+			curr->next[curr_level] = nullptr;
+		}
+
+		else if (org->next[curr_level]->next[curr_level] == nullptr)
 		{
 			curr->next[curr_level] = &tail;
-			if (curr_level != 0)
-			{
-				level++;
-			}
-			else
-			{
-				jobs.pop();
-			}
 		}
 
 		else
 		{
-			if (curr_level < MAXHEIGHT - 1 && org->next[curr_level] == org->next[curr_level - 1])
+			if (curr_level < MAXHEIGHT - 1 && org->next[curr_level] == org->next[curr_level + 1])
 			{
-				curr->next[curr_level] = curr->next[curr_level - 1];
+				curr->next[curr_level] = curr->next[curr_level + 1];
 			}
 			else
 			{
 				auto org_next = org->next[curr_level];
 				auto new_node = new SLNODE{org_next->key, org_next->height};
 				curr->next[curr_level] = new_node;
+				jobs.emplace(org->next[curr_level], curr->next[curr_level], org->next[curr_level]->height - 1);
 			}
-
-			if (curr_level != 0)
-			{
-				level++;
-			}
-			else
-			{
-				jobs.pop();
-			}
-
-			jobs.emplace(org->next[curr_level], curr->next[curr_level], curr_level);
 		}
 
-		copy_and_link(jobs);
+		return copy_and_link(jobs);
 	}
 
 	void Init()
@@ -391,7 +398,10 @@ public:
 		return combined_list[thread_id]->obj;
 	}
 
-	void update_combinded(Combined *target)
+	void update_combinded(Combined *target, const shared_lock<shared_mutex> &lg)
+	{
+	}
+	void update_combinded(Combined *target, const unique_lock<shared_mutex> &lg)
 	{
 		for (auto comb : combined_list)
 		{
@@ -418,13 +428,14 @@ public:
 			for (auto comb : combined_list)
 			{
 				lg = LOCK{comb->rw_lock, try_to_lock};
-				if (lg && cond(*comb))
+				if (lg)
 				{
 					if (comb->last_node == nullptr)
 					{
-						update_combinded(comb);
+						update_combinded(comb, lg);
 					}
-					return make_pair(move(lg), ref(*comb));
+					if (cond(*comb))
+						return make_pair(move(lg), ref(*comb));
 				}
 			}
 		} while (try_until_success);
@@ -506,7 +517,7 @@ public:
 		auto old_head = head.load(memory_order_relaxed);
 		auto old_seq = old_head->seq;
 
-		auto ret = get_comb<shared_lock<shared_mutex>>(false, [old_seq](const Combined &c) { return c.last_node->seq == old_seq; });
+		auto ret = get_comb<shared_lock<shared_mutex>>(false, [old_seq](const Combined &c) { return c.last_node != nullptr && c.last_node->seq == old_seq; });
 		if (ret)
 		{
 			auto [lg, comb] = move(*ret);
@@ -542,6 +553,8 @@ public:
 		// 찾은 comb들을 lock을 걸고 last_node를 nullptr로 만든다. + seq_obj도 초기화한다.
 		for (auto comb : combined_list)
 		{
+			if (comb->last_node == nullptr)
+				continue;
 			// comb->last_node를 초기화 하는 thread는 현재 자신 밖에 없으므로 lock 없이 읽어도 안전.
 			if (comb->last_node->seq < min_seq)
 			{
