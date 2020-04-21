@@ -9,7 +9,7 @@
 #include <optional>
 #include <algorithm>
 #include <cassert>
-#include <stack>
+#include <unordered_map>
 
 #ifndef READ_PROPORTION
 #define READ_PROPORTION 30
@@ -91,14 +91,9 @@ public:
 	{
 		Init();
 	}
-	SKLIST(const SKLIST &other) : SKLIST{}
+	SKLIST(const SKLIST &other) : SKLIST()
 	{
-		vector<CopyingInfo> nodes_unlinked;
-		nodes_unlinked.emplace_back(&other.head, &this->head, MAXHEIGHT - 1);
-		while (nodes_unlinked.empty() == false)
-		{
-			copy_and_link(nodes_unlinked);
-		}
+		copy_and_link(other, *this);
 	}
 	SKLIST(SKLIST &&other) : head{move(other.head)}, tail{move(other.tail)}
 	{
@@ -112,12 +107,7 @@ public:
 	{
 		Init();
 		// tuple<original_node, current_node, highest_unlinked_level>
-		vector<CopyingInfo> nodes_unlinked;
-		nodes_unlinked.emplace_back(&other.head, &this->head, MAXHEIGHT - 1);
-		while (nodes_unlinked.empty() == false)
-		{
-			copy_and_link(nodes_unlinked);
-		}
+		copy_and_link(other, *this);
 		return *this;
 	}
 	SKLIST &operator=(SKLIST &&other)
@@ -131,41 +121,34 @@ public:
 		return *this;
 	}
 
-	void copy_and_link(vector<CopyingInfo> &jobs)
+	static void copy_and_link(const SKLIST &from, SKLIST &to)
 	{
-		auto &job = jobs.back();
-		const auto org = job.org;
-		const auto curr = job.curr;
-		const auto curr_level = job.level;
+		unordered_map<const SLNODE *, SLNODE *> ptr_map;
+		ptr_map[&from.tail] = &to.tail;
 
-		if (curr_level != 0)
-			job.level--;
-		else
-			jobs.pop_back();
-
-		if (org->next[curr_level] == nullptr)
+		auto from_node = &from.head;
+		auto to_node = &to.head;
+		while (from_node->next[0] != nullptr)
 		{
-			curr->next[curr_level] = nullptr;
-		}
-
-		else if (org->next[curr_level]->next[curr_level] == nullptr)
-		{
-			curr->next[curr_level] = &tail;
-		}
-
-		else
-		{
-			if (curr_level < MAXHEIGHT - 1 && org->next[curr_level] == org->next[curr_level + 1])
+			for (auto i = 0; i < from_node->height; ++i)
 			{
-				curr->next[curr_level] = curr->next[curr_level + 1];
+				const SLNODE *const from_next = from_node->next[i];
+				auto &to_next = to_node->next[i];
+
+				auto it = ptr_map.find(from_next);
+				if (it == ptr_map.end())
+				{
+					auto new_node = new SLNODE{from_next->key, from_next->height};
+					to_next = new_node;
+					ptr_map.emplace(from_next, new_node);
+				}
+				else
+				{
+					to_next = it->second;
+				}
 			}
-			else
-			{
-				auto org_next = org->next[curr_level];
-				auto new_node = new SLNODE{org_next->key, org_next->height};
-				curr->next[curr_level] = new_node;
-				jobs.emplace_back(org->next[curr_level], curr->next[curr_level], org->next[curr_level]->height - 1);
-			}
+			from_node = from_node->next[0];
+			to_node = to_node->next[0];
 		}
 	}
 
@@ -396,24 +379,29 @@ public:
 		return combined_list[thread_id]->obj;
 	}
 
-	void update_combinded(Combined *target, const shared_lock<shared_mutex> &lg)
+	bool update_combinded(Combined *target, const shared_lock<shared_mutex> &lg)
 	{
+		return false;
 	}
-	void update_combinded(Combined *target, const unique_lock<shared_mutex> &lg)
+	bool update_combinded(Combined *target, const unique_lock<shared_mutex> &lg)
 	{
-		for (auto comb : combined_list)
+		while (true)
 		{
-			if (comb == target)
-				continue;
+			for (auto comb : combined_list)
+			{
+				if (comb == target)
+					continue;
 
-			shared_lock<shared_mutex> slg{comb->rw_lock};
-			if (comb->last_node == nullptr)
-				continue;
+				shared_lock<shared_mutex> slg{comb->rw_lock};
+				if (comb->last_node == nullptr)
+					continue;
 
-			target->obj = comb->obj;
-			target->last_node = comb->last_node;
-			break;
+				target->obj = comb->obj;
+				target->last_node = comb->last_node;
+				return true;
+			}
 		}
+		return true;
 	}
 
 	template <typename LOCK, typename F>
@@ -432,7 +420,9 @@ public:
 					if (comb->last_node == nullptr)
 					{
 						is_obj_exist = update_combinded(comb, lg);
-					} else {
+					}
+					else
+					{
 						is_obj_exist = true;
 					}
 
