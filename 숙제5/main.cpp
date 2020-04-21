@@ -253,7 +253,7 @@ struct Combined
 	Combined(Node &node) : last_node{&node} {}
 };
 
-constexpr int RECYCLE_RATE = 100;
+constexpr int RECYCLE_RATE = 1000;
 
 class OLFUniversal
 {
@@ -323,22 +323,27 @@ public:
 
 	optional<Response> update_local_obj(const Node &prefer, int thread_id)
 	{
-		auto ret = get_max_comb<unique_lock<shared_mutex>>(true, [](auto &_) { return true; });
-		auto [lg, comb] = move(*ret);
-		assert(lg && "a lock guard didn't get its mutex");
-
-		auto &last_node = comb.last_node;
-		auto &last_obj = comb.obj;
-
-		if (last_node->seq >= prefer.seq)
+		optional<Response> result;
 		{
-			return nullopt;
-		}
-		last_node = last_node->next.load(memory_order_relaxed);
-		while (last_node->seq < prefer.seq)
-		{
-			last_obj.apply(last_node->invoc);
+			auto ret = get_max_comb<unique_lock<shared_mutex>>(true, [](auto &_) { return true; });
+			auto [lg, comb] = move(*ret);
+			assert(lg && "a lock guard didn't get its mutex");
+
+			auto &last_node = comb.last_node;
+			auto &last_obj = comb.obj;
+
+			if (last_node->seq >= prefer.seq)
+			{
+				return nullopt;
+			}
 			last_node = last_node->next.load(memory_order_relaxed);
+			while (last_node->seq < prefer.seq)
+			{
+				last_obj.apply(last_node->invoc);
+				last_node = last_node->next.load(memory_order_relaxed);
+			}
+
+			result = last_obj.apply(last_node->invoc);
 		}
 
 		if (invoke_num.load(memory_order_relaxed) < RECYCLE_RATE)
@@ -350,7 +355,7 @@ public:
 			}
 		}
 
-		return last_obj.apply(last_node->invoc);
+		return result;
 	}
 
 	optional<Response> apply(const Invoc &invoc, int thread_id)
