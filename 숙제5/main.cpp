@@ -7,6 +7,7 @@
 #include <mutex>
 #include <shared_mutex>
 #include <optional>
+#include <cassert>
 
 using namespace std;
 using namespace std::chrono;
@@ -275,6 +276,10 @@ public:
 		}
 		delete cur;
 		delete tail;
+		for (auto c : combined_list)
+		{
+			delete c;
+		}
 	}
 
 	Object &current_obj()
@@ -315,12 +320,14 @@ public:
 	optional<Response> update_local_obj(const Node &prefer, int thread_id)
 	{
 		auto ret = get_max_comb<unique_lock<shared_mutex>>(true, [](auto &_) { return true; });
-		auto &[lg, comb] = *ret;
+		auto [lg, comb] = move(*ret);
+		assert(lg && "a lock guard didn't get its mutex");
 
 		auto &last_node = comb.last_node;
 		auto &last_obj = comb.obj;
 
-		if (last_node->seq >= prefer.seq) {
+		if (last_node->seq >= prefer.seq)
+		{
 			return nullopt;
 		}
 		last_node = last_node->next.load(memory_order_relaxed);
@@ -358,7 +365,8 @@ public:
 		{
 			Node *old_head = head.load(memory_order_relaxed);
 			Node *old_next = old_head->next.load(memory_order_relaxed);
-			if (old_next != nullptr){
+			if (old_next != nullptr)
+			{
 				head.compare_exchange_strong(old_head, old_next);
 				continue;
 			}
@@ -382,7 +390,8 @@ public:
 		auto ret = get_max_comb<shared_lock<shared_mutex>>(false, [old_seq](const Combined &c) { return c.last_node->seq == old_seq; });
 		if (ret)
 		{
-			auto &[lg, comb] = *ret;
+			auto [lg, comb] = move(*ret);
+			assert(lg && "a lock guard didn't get its mutex");
 			return comb.obj.apply(invoc);
 		}
 		return nullopt;
