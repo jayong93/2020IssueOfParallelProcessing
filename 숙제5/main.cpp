@@ -330,14 +330,14 @@ public:
 			last_node = last_node->next.load(memory_order_relaxed);
 		}
 
-		// if (invoke_num.load(memory_order_relaxed) < RECYCLE_RATE)
-		// {
-		// 	if (invoke_num.fetch_add(1, memory_order_relaxed) + 1 == RECYCLE_RATE)
-		// 	{
-		// 		recycle();
-		// 		invoke_num.store(0, memory_order_relaxed);
-		// 	}
-		// }
+		if (invoke_num.load(memory_order_relaxed) < RECYCLE_RATE)
+		{
+			if (invoke_num.fetch_add(1, memory_order_relaxed) + 1 == RECYCLE_RATE)
+			{
+				recycle();
+				invoke_num.store(0, memory_order_relaxed);
+			}
+		}
 
 		return last_obj.apply(last_node->invoc);
 	}
