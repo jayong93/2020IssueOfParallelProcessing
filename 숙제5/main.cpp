@@ -7,7 +7,9 @@
 #include <mutex>
 #include <shared_mutex>
 #include <optional>
+#include <algorithm>
 #include <cassert>
+#include <stack>
 
 #ifndef READ_PROPORTION
 #define READ_PROPORTION 30
@@ -37,7 +39,7 @@ class SLNODE
 {
 public:
 	int key;
-	SLNODE *next[MAXHEIGHT];
+	array<SLNODE *, MAXHEIGHT> next;
 	int height;
 	SLNODE(int x, int h)
 	{
@@ -64,6 +66,12 @@ public:
 
 class SKLIST
 {
+	struct CopyingInfo
+	{
+		SLNODE *org, *curr;
+		int level;
+	};
+
 	SLNODE head, tail;
 
 public:
@@ -78,6 +86,82 @@ public:
 	~SKLIST()
 	{
 		Init();
+	}
+	SKLIST(const SKLIST &other) : SKLIST{}
+	{
+		stack<CopyingInfo> nodes_unlinked;
+		nodes_unlinked.emplace(&other.head, &this->head, MAXHEIGHT - 1);
+		copy_and_link(nodes_unlinked);
+	}
+	SKLIST(SKLIST &&other): head{move(other.head)}, tail{move(other.tail)}
+	{
+		for(auto& p : other.head.next) {
+			p = &other.tail;
+		}
+	}
+
+	SKLIST &operator=(const SKLIST &other)
+	{
+		Init();
+		// tuple<original_node, current_node, highest_unlinked_level>
+		stack<CopyingInfo> nodes_unlinked;
+		nodes_unlinked.emplace(&other.head, &this->head, MAXHEIGHT - 1);
+		copy_and_link(nodes_unlinked);
+	}
+	SKLIST& operator=(SKLIST&& other) {
+		this->head = move(other.head);
+		this->tail = move(other.tail);
+		for(auto& p : other.head.next) {
+			p = &other.tail;
+		}
+	}
+
+	void copy_and_link(stack<CopyingInfo> &jobs)
+	{
+		if (jobs.empty())
+			return;
+
+		auto &[org, curr, level] = jobs.top();
+		auto curr_level = level;
+		if (org->next[curr_level]->next[curr_level] == nullptr)
+		{
+			curr->next[curr_level] = &tail;
+			if (curr_level != 0)
+			{
+				level++;
+			}
+			else
+			{
+				jobs.pop();
+			}
+		}
+
+		else
+		{
+			if (curr_level < MAXHEIGHT - 1 && org->next[curr_level] == org->next[curr_level - 1])
+			{
+				curr->next[curr_level] = curr->next[curr_level - 1];
+			}
+			else
+			{
+				auto org_next = org->next[curr_level];
+				auto new_node = new SLNODE{org_next->key, org_next->height};
+				curr->next[curr_level] = new_node;
+			}
+
+			if (curr_level != 0)
+			{
+				level++;
+			}
+			else
+			{
+				jobs.pop();
+			}
+
+			jobs.emplace(org->next[curr_level], curr->next[curr_level], curr_level);
+		}
+
+		copy_and_link(jobs);
 	}
 
 	void Init()
@@ -242,6 +326,11 @@ struct Object
 			return 0;
 		}
 	}
+
+	void init()
+	{
+		container.Init();
+	}
 };
 
 struct Combined
@@ -302,8 +391,25 @@ public:
 		return combined_list[thread_id]->obj;
 	}
 
+	void update_combinded(Combined *target)
+	{
+		for (auto comb : combined_list)
+		{
+			if (comb == target)
+				continue;
+
+			shared_lock<shared_mutex> slg{comb->rw_lock};
+			if (comb->last_node == nullptr)
+				continue;
+
+			target->obj = comb->obj;
+			target->last_node = comb->last_node;
+			break;
+		}
+	}
+
 	template <typename LOCK, typename F>
-	optional<pair<LOCK, Combined &>> get_max_comb(
+	optional<pair<LOCK, Combined &>> get_comb(
 		bool try_until_success, F cond)
 	{
 		LOCK lg;
@@ -314,6 +420,10 @@ public:
 				lg = LOCK{comb->rw_lock, try_to_lock};
 				if (lg && cond(*comb))
 				{
+					if (comb->last_node == nullptr)
+					{
+						update_combinded(comb);
+					}
 					return make_pair(move(lg), ref(*comb));
 				}
 			}
@@ -325,7 +435,7 @@ public:
 	{
 		optional<Response> result;
 		{
-			auto ret = get_max_comb<unique_lock<shared_mutex>>(true, [](auto &_) { return true; });
+			auto ret = get_comb<unique_lock<shared_mutex>>(true, [](auto &_) { return true; });
 			auto [lg, comb] = move(*ret);
 			assert(lg && "a lock guard didn't get its mutex");
 
@@ -396,7 +506,7 @@ public:
 		auto old_head = head.load(memory_order_relaxed);
 		auto old_seq = old_head->seq;
 
-		auto ret = get_max_comb<shared_lock<shared_mutex>>(false, [old_seq](const Combined &c) { return c.last_node->seq == old_seq; });
+		auto ret = get_comb<shared_lock<shared_mutex>>(false, [old_seq](const Combined &c) { return c.last_node->seq == old_seq; });
 		if (ret)
 		{
 			auto [lg, comb] = move(*ret);
@@ -406,31 +516,43 @@ public:
 		return nullopt;
 	}
 
-	void recycle()
+	void remove_until_seq(uint64_t until_seq)
 	{
-		Node *min = combined_list[0]->last_node;
-		for (auto i = 1; i < combined_list.size(); ++i)
-		{
-			const auto &combined = combined_list[i];
-			if (combined->last_node->seq < min->seq)
-			{
-				min = combined->last_node;
-			}
-		}
-
-		if (min == tail)
+		auto old_next = tail->next.load(memory_order_relaxed);
+		if (until_seq <= old_next->seq)
 		{
 			return;
 		}
 
-		auto old_next = tail->next.load(memory_order_relaxed);
-		tail->next.store(min, memory_order_relaxed);
-		while (old_next != min)
+		do
 		{
 			auto tmp = old_next;
 			old_next = old_next->next.load(memory_order_relaxed);
 			delete tmp;
+		} while (old_next->seq < until_seq);
+		tail->next.store(old_next, memory_order_relaxed);
+	}
+
+	void recycle()
+	{
+		size_t num_to_remove = RECYCLE_RATE / 2;
+		auto min_seq = tail->next.load(memory_order_relaxed)->seq + num_to_remove;
+
+		// min_seq보다 낮은 seq를 last_node로 갖는 comb들을 찾는다.
+		// 찾은 comb들을 lock을 걸고 last_node를 nullptr로 만든다. + seq_obj도 초기화한다.
+		for (auto comb : combined_list)
+		{
+			// comb->last_node를 초기화 하는 thread는 현재 자신 밖에 없으므로 lock 없이 읽어도 안전.
+			if (comb->last_node->seq < min_seq)
+			{
+				unique_lock<shared_mutex> lg{comb->rw_lock};
+
+				comb->last_node = nullptr;
+				comb->obj.init();
+			}
 		}
+
+		remove_until_seq(min_seq);
 	}
 
 private:
