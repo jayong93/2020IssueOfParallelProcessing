@@ -311,6 +311,7 @@ struct Object
 		case Func::Contains:
 			return container.Contains(invoc.arg);
 		default:
+			cerr << "Unknown Method" << endl;
 			return 0;
 		}
 	}
