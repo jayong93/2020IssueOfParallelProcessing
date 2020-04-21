@@ -370,6 +370,8 @@ public:
 		int index = 1;
 		for (auto it = combined_list.begin() + 1; it != combined_list.end(); ++it, ++index)
 		{
+			if ((*it)->last_node == nullptr)
+				continue;
 			if (m->seq < (*it)->last_node->seq)
 			{
 				m = (*it)->last_node;
