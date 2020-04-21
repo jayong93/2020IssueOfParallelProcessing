@@ -93,8 +93,8 @@ public:
 	}
 	SKLIST(const SKLIST &other) : SKLIST{}
 	{
-		stack<CopyingInfo> nodes_unlinked;
-		nodes_unlinked.emplace(&other.head, &this->head, MAXHEIGHT - 1);
+		vector<CopyingInfo> nodes_unlinked;
+		nodes_unlinked.emplace_back(&other.head, &this->head, MAXHEIGHT - 1);
 		while (nodes_unlinked.empty() == false)
 		{
 			copy_and_link(nodes_unlinked);
@@ -112,8 +112,8 @@ public:
 	{
 		Init();
 		// tuple<original_node, current_node, highest_unlinked_level>
-		stack<CopyingInfo> nodes_unlinked;
-		nodes_unlinked.emplace(&other.head, &this->head, MAXHEIGHT - 1);
+		vector<CopyingInfo> nodes_unlinked;
+		nodes_unlinked.emplace_back(&other.head, &this->head, MAXHEIGHT - 1);
 		while (nodes_unlinked.empty() == false)
 		{
 			copy_and_link(nodes_unlinked);
@@ -131,9 +131,9 @@ public:
 		return *this;
 	}
 
-	void copy_and_link(stack<CopyingInfo> &jobs)
+	void copy_and_link(vector<CopyingInfo> &jobs)
 	{
-		auto &job = jobs.top();
+		auto &job = jobs.back();
 		const auto org = job.org;
 		const auto curr = job.curr;
 		const auto curr_level = job.level;
@@ -141,7 +141,7 @@ public:
 		if (curr_level != 0)
 			job.level--;
 		else
-			jobs.pop();
+			jobs.pop_back();
 
 		if (org->next[curr_level] == nullptr)
 		{
@@ -164,11 +164,9 @@ public:
 				auto org_next = org->next[curr_level];
 				auto new_node = new SLNODE{org_next->key, org_next->height};
 				curr->next[curr_level] = new_node;
-				jobs.emplace(org->next[curr_level], curr->next[curr_level], org->next[curr_level]->height - 1);
+				jobs.emplace_back(org->next[curr_level], curr->next[curr_level], org->next[curr_level]->height - 1);
 			}
 		}
-
-		return copy_and_link(jobs);
 	}
 
 	void Init()
@@ -430,11 +428,15 @@ public:
 				lg = LOCK{comb->rw_lock, try_to_lock};
 				if (lg)
 				{
+					bool is_obj_exist = false;
 					if (comb->last_node == nullptr)
 					{
-						update_combinded(comb, lg);
+						is_obj_exist = update_combinded(comb, lg);
+					} else {
+						is_obj_exist = true;
 					}
-					if (cond(*comb))
+
+					if (is_obj_exist && cond(*comb))
 						return make_pair(move(lg), ref(*comb));
 				}
 			}
@@ -517,7 +519,7 @@ public:
 		auto old_head = head.load(memory_order_relaxed);
 		auto old_seq = old_head->seq;
 
-		auto ret = get_comb<shared_lock<shared_mutex>>(false, [old_seq](const Combined &c) { return c.last_node != nullptr && c.last_node->seq == old_seq; });
+		auto ret = get_comb<shared_lock<shared_mutex>>(false, [old_seq](const Combined &c) { return c.last_node->seq == old_seq; });
 		if (ret)
 		{
 			auto [lg, comb] = move(*ret);
