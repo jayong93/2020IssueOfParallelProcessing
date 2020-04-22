@@ -21,10 +21,9 @@ do
         echo "Iteration $i" >> "${mem_out_file}"
 
         bash -c 'while true; do (ps -eo rsz,cmd | grep IPP_HW5 | grep -v grep; sleep 1s); done' >> "${mem_out_file}" &
-        pid=$!
-        trap 'kill -9 ${pid}' EXIT
+        trap 'kill -9 %1' EXIT
         stdbuf -o 0 "${project_dir}/bin/IPP_HW5" | tee -a "${out_file}"
-        kill -9 ${pid}
+        kill -9 %1
 
         echo "" >> "${out_file}"
         echo "" >> "${mem_out_file}"
