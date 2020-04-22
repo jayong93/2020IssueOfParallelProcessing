@@ -166,9 +166,7 @@ public:
 	}
 	void Find(int key, SLNODE *preds[MAXHEIGHT], SLNODE *currs[MAXHEIGHT])
 	{
-		int cl = MAXHEIGHT - 1;
-		while (true)
-		{
+		for (auto cl = MAXHEIGHT - 1; 0 <= cl; --cl) {
 			if (MAXHEIGHT - 1 == cl)
 				preds[cl] = &head;
 			else
@@ -179,9 +177,6 @@ public:
 				preds[cl] = currs[cl];
 				currs[cl] = currs[cl]->next[cl];
 			}
-			if (0 == cl)
-				return;
-			cl--;
 		}
 	}
 
@@ -382,11 +377,7 @@ public:
 		return combined_list[thread_id]->obj;
 	}
 
-	bool update_combinded(Combined *target, const shared_lock<shared_mutex> &lg)
-	{
-		return false;
-	}
-	bool update_combinded(Combined *target, const unique_lock<shared_mutex> &lg)
+	void update_combinded(Combined *target, const unique_lock<shared_mutex> &lg)
 	{
 		while (true)
 		{
@@ -401,48 +392,56 @@ public:
 
 				target->obj = comb->obj;
 				target->last_node = comb->last_node;
-				return true;
+				return;
 			}
 		}
-		return true;
 	}
 
-	template <typename LOCK, typename F>
-	optional<pair<LOCK, Combined &>> get_comb(
-		bool try_until_success, F cond)
+	template <typename F>
+	optional<pair<shared_lock<shared_mutex>, Combined &>> get_comb(F &&cond)
 	{
-		LOCK lg;
+		shared_lock<shared_mutex> lg;
+		for (auto comb : combined_list)
+		{
+			lg = shared_lock<shared_mutex>{comb->rw_lock, try_to_lock};
+			if (lg)
+			{
+				if (comb->last_node == nullptr)
+					continue;
+
+				else if (cond(*comb))
+					return make_pair(move(lg), ref(*comb));
+			}
+		}
+		return nullopt;
+	}
+
+	pair<unique_lock<shared_mutex>, Combined &> get_comb()
+	{
+		unique_lock<shared_mutex> lg;
 		do
 		{
 			for (auto comb : combined_list)
 			{
-				lg = LOCK{comb->rw_lock, try_to_lock};
+				lg = unique_lock<shared_mutex>{comb->rw_lock, try_to_lock};
 				if (lg)
 				{
 					bool is_obj_exist = false;
 					if (comb->last_node == nullptr)
 					{
-						is_obj_exist = update_combinded(comb, lg);
+						update_combinded(comb, lg);
 					}
-					else
-					{
-						is_obj_exist = true;
-					}
-
-					if (is_obj_exist && cond(*comb))
-						return make_pair(move(lg), ref(*comb));
+					return make_pair(move(lg), ref(*comb));
 				}
 			}
-		} while (try_until_success);
-		return nullopt;
+		} while (true);
 	}
 
 	optional<Response> update_local_obj(const Node &prefer, int thread_id)
 	{
 		optional<Response> result;
 		{
-			auto ret = get_comb<unique_lock<shared_mutex>>(true, [](auto &_) { return true; });
-			auto [lg, comb] = move(*ret);
+			auto &&[lg, comb] = get_comb();
 			assert(lg && "a lock guard didn't get its mutex");
 
 			auto &last_node = comb.last_node;
@@ -450,7 +449,7 @@ public:
 
 			if (last_node->seq >= prefer.seq)
 			{
-				return nullopt;
+				return result;
 			}
 			last_node = last_node->next.load(memory_order_relaxed);
 			while (last_node->seq < prefer.seq)
@@ -512,7 +511,7 @@ public:
 		auto old_head = head.load(memory_order_relaxed);
 		auto old_seq = old_head->seq;
 
-		auto ret = get_comb<shared_lock<shared_mutex>>(false, [old_seq](const Combined &c) { return c.last_node->seq == old_seq; });
+		auto ret = get_comb([old_seq](const Combined &c) { return c.last_node->seq == old_seq; });
 		if (ret)
 		{
 			auto [lg, comb] = move(*ret);
@@ -589,7 +588,7 @@ void ThreadFunc(OLFUniversal *list, int num_thread, int thread_id)
 			key = fast_rand() % KEY_RANGE;
 			list->apply(Invoc(Func::Contains, key), thread_id);
 		}
-		else if (ticket - READ_PROPORTION > pivot)
+		else if (ticket - READ_PROPORTION < pivot)
 		{
 			// add
 			key = fast_rand() % KEY_RANGE;
@@ -619,7 +618,7 @@ int main()
 		auto d = high_resolution_clock::now() - s;
 
 		list.current_obj().container.display20();
-		cout << n << "Threads,  ";
+		cout << n << "Threads";
 		cout << ",  Duration : " << duration_cast<milliseconds>(d).count() << " msecs." << endl;
 	}
 }
