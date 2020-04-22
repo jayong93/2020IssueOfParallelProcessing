@@ -5,6 +5,7 @@ project_dir=${1:?"give a project's root dir"}
 
 mkdir -p "${project_dir}/bench"
 
+trap 'kill -9 %1' EXIT
 for p in ${proportions[@]}
 do
     cmake -D READ_PROPORTION=${p} -D CMAKE_BUILD_TYPE=Release .
@@ -21,7 +22,6 @@ do
         echo "Iteration $i" >> "${mem_out_file}"
 
         bash -c 'while true; do (ps -eo rsz,cmd | grep IPP_HW5 | grep -v grep; sleep 1s); done' >> "${mem_out_file}" &
-        trap 'kill -9 %1' EXIT
         stdbuf -o 0 "${project_dir}/bin/IPP_HW5" | tee -a "${out_file}"
         kill -9 %1
 
