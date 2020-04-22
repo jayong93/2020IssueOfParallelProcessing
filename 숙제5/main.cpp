@@ -399,8 +399,7 @@ public:
 		}
 	}
 
-	template <typename F>
-	optional<pair<shared_lock<shared_mutex>, Combined &>> get_comb_read(F &&cond)
+	optional<pair<shared_lock<shared_mutex>, Combined &>> get_comb_read(const Node& old_head)
 	{
 		shared_lock<shared_mutex> lg;
 		for (auto comb : combined_list)
@@ -411,7 +410,7 @@ public:
 				if (comb->last_node == nullptr)
 					continue;
 
-				else if (cond(*comb))
+				else if (old_head.seq == comb->last_node->seq)
 					return make_pair(move(lg), ref(*comb));
 			}
 		}
@@ -439,9 +438,10 @@ public:
 		} while (true);
 	}
 
-	optional<Response> update_local_obj(const Node &prefer, int thread_id)
+	optional<Response> update_local_obj(const Node& prefer, bool is_write)
 	{
 		optional<Response> result;
+		const auto until_seq = prefer.seq;
 		{
 			auto &&[lg, comb] = get_comb();
 			assert(lg && "a lock guard didn't get its mutex");
@@ -449,12 +449,12 @@ public:
 			auto &last_node = comb.last_node;
 			auto &last_obj = comb.obj;
 
-			if (last_node->seq >= prefer.seq)
+			if (last_node->seq >= until_seq)
 			{
-				return result;
+				return nullopt;
 			}
 			last_node = last_node->next.load(memory_order_relaxed);
-			while (last_node->seq < prefer.seq)
+			while (last_node->seq < until_seq)
 			{
 				last_obj.apply(last_node->invoc);
 				last_node = last_node->next.load(memory_order_relaxed);
@@ -463,7 +463,7 @@ public:
 			result = last_obj.apply(last_node->invoc);
 		}
 
-		if (invoke_num.load(memory_order_relaxed) < RECYCLE_RATE)
+		if (is_write && invoke_num.load(memory_order_relaxed) < RECYCLE_RATE)
 		{
 			if (invoke_num.fetch_add(1, memory_order_relaxed) + 1 == RECYCLE_RATE)
 			{
@@ -475,15 +475,11 @@ public:
 		return result;
 	}
 
-	optional<Response> apply(const Invoc &invoc, int thread_id)
+	optional<Response> apply(const Invoc &invoc)
 	{
 		if (invoc.is_read_only())
 		{
-			optional<Response> ret_val = do_read_only(invoc, thread_id);
-			if (ret_val)
-			{
-				return ret_val;
-			}
+			return do_read_only(invoc);
 		}
 
 		Node *prefer = new Node(invoc);
@@ -505,22 +501,21 @@ public:
 			}
 		}
 
-		return update_local_obj(*prefer, thread_id);
+		return update_local_obj(*prefer, true);
 	}
 
-	optional<Response> do_read_only(const Invoc &invoc, int thread_id)
+	optional<Response> do_read_only(const Invoc &invoc)
 	{
 		auto old_head = head.load(memory_order_relaxed);
-		auto old_seq = old_head->seq;
-
-		auto ret = get_comb_read([old_seq](const Combined &c) { return c.last_node->seq == old_seq; });
+		auto ret = get_comb_read(*old_head);
 		if (ret)
 		{
-			auto [lg, comb] = move(*ret);
+			auto&& [lg, comb] = move(*ret);
 			assert(lg && "a lock guard didn't get its mutex");
 			return comb.obj.apply(invoc);
+		} else {
+			return update_local_obj(*old_head, false);
 		}
-		return nullopt;
 	}
 
 	void remove_until_seq(uint64_t until_seq)
@@ -599,19 +594,19 @@ void ThreadFunc(OLFUniversal *list, int num_thread, int thread_id)
 		{
 			// contains
 			key = fast_rand() % KEY_RANGE;
-			list->apply(Invoc(Func::Contains, key), thread_id);
+			list->apply(Invoc(Func::Contains, key));
 		}
 		else if (ticket - READ_PROPORTION < pivot)
 		{
 			// add
 			key = fast_rand() % KEY_RANGE;
-			list->apply(Invoc(Func::Add, key), thread_id);
+			list->apply(Invoc(Func::Add, key));
 		}
 		else
 		{
 			// remove
 			key = fast_rand() % KEY_RANGE;
-			list->apply(Invoc(Func::Remove, key), thread_id);
+			list->apply(Invoc(Func::Remove, key));
 		}
 	}
 }
