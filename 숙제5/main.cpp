@@ -166,7 +166,8 @@ public:
 	}
 	void Find(int key, SLNODE *preds[MAXHEIGHT], SLNODE *currs[MAXHEIGHT])
 	{
-		for (auto cl = MAXHEIGHT - 1; 0 <= cl; --cl) {
+		for (auto cl = MAXHEIGHT - 1; 0 <= cl; --cl)
+		{
 			if (MAXHEIGHT - 1 == cl)
 				preds[cl] = &head;
 			else
@@ -543,8 +544,6 @@ public:
 		size_t num_to_remove = RECYCLE_RATE / 2;
 		auto min_seq = tail->next.load(memory_order_relaxed)->seq + num_to_remove;
 
-		// min_seq보다 낮은 seq를 last_node로 갖는 comb들을 찾는다.
-		// 찾은 comb들을 lock을 걸고 last_node를 nullptr로 만든다. + seq_obj도 초기화한다.
 		for (auto comb : combined_list)
 		{
 			if (comb->last_node == nullptr)
@@ -556,6 +555,19 @@ public:
 
 				comb->last_node = nullptr;
 				comb->obj.init();
+			}
+		}
+
+		// combine을 초기화하며 진행하는 도중에, 이미 초기화된 comb에 접근해서 조금 뒤에 초기화 될 comb를 복제하면 오류날 수 있음
+		// 다시한번 loop를 돌면서 오래된 seq가 있지는 않는지 확인
+		for (auto comb : combined_list)
+		{
+			shared_lock<shared_mutex> lg{comb->rw_lock};
+			if (comb->last_node == nullptr)
+				continue;
+
+			if (comb->last_node->seq < min_seq) {
+				min_seq = comb->last_node->seq;
 			}
 		}
 
