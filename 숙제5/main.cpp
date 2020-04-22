@@ -338,6 +338,7 @@ public:
 		tail = new Node(move(invoc));
 		tail->seq = 1;
 		head.store(tail, memory_order_relaxed);
+		combined_list.reserve(capacity);
 		for (auto i = 0; i < capacity; ++i)
 		{
 			combined_list.emplace_back(new Combined(*tail));
@@ -399,7 +400,7 @@ public:
 	}
 
 	template <typename F>
-	optional<pair<shared_lock<shared_mutex>, Combined &>> get_comb(F &&cond)
+	optional<pair<shared_lock<shared_mutex>, Combined &>> get_comb_read(F &&cond)
 	{
 		shared_lock<shared_mutex> lg;
 		for (auto comb : combined_list)
@@ -512,7 +513,7 @@ public:
 		auto old_head = head.load(memory_order_relaxed);
 		auto old_seq = old_head->seq;
 
-		auto ret = get_comb([old_seq](const Combined &c) { return c.last_node->seq == old_seq; });
+		auto ret = get_comb_read([old_seq](const Combined &c) { return c.last_node->seq == old_seq; });
 		if (ret)
 		{
 			auto [lg, comb] = move(*ret);
