@@ -27,4 +27,13 @@ void NUMA_dealloc(T *ptr)
     numa_free(ptr, sizeof(T));
 }
 
+template <typename T>
+struct DeallocNUMA
+{
+	void operator()(T *ptr)
+	{
+		NUMA_dealloc(ptr);
+	}
+};
+
 #endif /* C2A0BB25_4014_4864_ABBB_67EF5B019AB0 */

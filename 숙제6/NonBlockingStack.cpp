@@ -8,6 +8,7 @@
 #include <iterator>
 #include <chrono>
 #include <memory>
+#include <stack>
 #include <numa.h>
 #include "numa_util.h"
 
@@ -18,18 +19,18 @@ static constexpr int RANGE = 1000;
 
 unsigned long fast_rand(void)
 { //period 2^96-1
-    static thread_local unsigned long x = 123456789, y = 362436069, z = 521288629;
-    unsigned long t;
-    x ^= x << 16;
-    x ^= x >> 5;
-    x ^= x << 1;
+	static thread_local unsigned long x = 123456789, y = 362436069, z = 521288629;
+	unsigned long t;
+	x ^= x << 16;
+	x ^= x >> 5;
+	x ^= x << 1;
 
-    t = x;
-    x = y;
-    y = z;
-    z = t ^ x ^ y;
+	t = x;
+	x = y;
+	y = z;
+	z = t ^ x ^ y;
 
-    return z;
+	return z;
 }
 
 struct Node
@@ -48,98 +49,7 @@ bool CAS(atomic<Node *> &ptr, Node *old_value, Node *new_value)
 	return ptr.compare_exchange_strong(old_value, new_value);
 }
 
-thread_local int exSize = 1; // thread 별로 교환자 크기를 따로 관리.
 constexpr int MAX_THREAD = 64;
-
-class Exchanger
-{
-	volatile int value; // status와 교환값의 합성.
-
-	enum Status
-	{
-		EMPTY,
-		WAIT,
-		BUSY
-	};
-	bool CAS(int oldValue, int newValue, Status oldStatus, Status newStatus)
-	{
-		int oldV = oldValue << 2 | (int)oldStatus;
-		int newV = newValue << 2 | (int)newStatus;
-		return atomic_compare_exchange_strong(reinterpret_cast<atomic_int volatile *>(&value), &oldV, newV);
-	}
-
-public:
-	int exchange(int x)
-	{
-		while (true)
-		{
-			switch (Status(value & 0x3))
-			{
-			case EMPTY:
-			{
-				int tempVal = value >> 2;
-				if (false == CAS(tempVal, x, EMPTY, WAIT))
-					continue;
-
-				/* BUSY가 될 때까지 기다리며 timeout된 경우 -1 반환 */
-				int count;
-				for (count = 0; count < 100; ++count)
-				{
-					if (Status(value & 0x3) == BUSY)
-					{
-						int ret = value >> 2;
-						value = EMPTY;
-						return ret;
-					}
-				}
-				if (false == CAS(tempVal, 0, WAIT, EMPTY))
-				{ // 그 사이에 누가 들어온 경우
-					int ret = value >> 2;
-					value = EMPTY;
-					return ret;
-				}
-				return -1;
-			}
-			break;
-			case WAIT:
-			{
-				int temp = value >> 2;
-				if (false == CAS(temp, x, WAIT, BUSY))
-					break;
-				return temp;
-			}
-			break;
-			case BUSY:
-				if (exSize < MAX_THREAD)
-				{
-					exSize += 1;
-				}
-				return x;
-			default:
-				fprintf(stderr, "It's impossible case\n");
-				exit(1);
-			}
-		}
-	}
-};
-
-class EliminationArray
-{
-	Exchanger exchanger[MAX_THREAD];
-
-public:
-	int visit(int x)
-	{
-		int index = fast_rand() % exSize;
-		return exchanger[index].exchange(x);
-	}
-
-	void shrink()
-	{
-		if (exSize > 1)
-			exSize -= 1;
-	}
-};
 
 static unsigned NODE_NUM = numa_num_configured_nodes();
 static unsigned CPU_NUM = numa_num_configured_cpus();
@@ -151,99 +61,167 @@ unsigned get_node_id(unsigned tid)
 	return (tid / core_per_node) % NODE_NUM;
 }
 
-// Lock-Free Elimination BackOff Stack
-class LFEBOStack
+struct Exchanger
 {
-	atomic<Node *> top;
-	vector<EliminationArray*> eliminationArray;
-
+	unsigned op;				   // 0 == push, 1 == pop
+	unsigned value;				   // push일 때 넣을 값, pop일 때 받은 값
+	atomic_bool is_finished{true}; // 완료되었을 때 true로 바뀜.
+};
+class EliminationArray
+{
 public:
-	LFEBOStack() : top{nullptr}, eliminationArray{NODE_NUM}
+	EliminationArray(unsigned entry_num) : entries{entry_num}
 	{
-		for (auto i = 0; i < eliminationArray.size(); ++i)
+		for (auto &entry : entries)
 		{
-			eliminationArray[i] = NUMA_alloc<EliminationArray>(i);
-		}
-	}
-	~LFEBOStack() {
-		for(auto ptr : eliminationArray) {
-			NUMA_dealloc(ptr);
+			entry.reset(new Exchanger);
 		}
 	}
 
-	void Push(int x)
+	// 일반 thread가 호출할 methods
+	void push(int value, unsigned idx)
 	{
-		auto node_id = get_node_id(tid);
-		auto e = new Node{x};
-		while (true)
-		{
-			auto head = top.load(memory_order_relaxed);
-			e->next = head;
-			if (head != top.load(memory_order_relaxed))
-				continue;
-			if (true == CAS(top, head, e))
-				return;
-			int result = eliminationArray[node_id]->visit(x);
-			if (0 == result)
-				break; // pop과 교환됨.
-			if (-1 == result)
-				eliminationArray[node_id]->shrink(); // timeout 됨.
-		}
+		auto &entry = entries[idx];
+		entry->value = value;
+		entry->op = 0;
+		entry->is_finished.store(false, memory_order_release);
+		while (entry->is_finished.load(memory_order_acquire) == false)
+			;
+	}
+	int pop(unsigned idx)
+	{
+		auto &entry = entries[idx];
+		entry->op = 1;
+		entry->is_finished.store(false, memory_order_release);
+		while (entry->is_finished.load(memory_order_acquire) == false)
+			;
+		return entry->value;
 	}
 
-	int Pop()
+	// helper thread가 호출할 methods
+	vector<Exchanger *> process_ops()
 	{
-		auto node_id = get_node_id(tid);
-		while (true)
+		vector<Exchanger *> result;
+		vector<Exchanger *> pushes;
+		vector<Exchanger *> pops;
+		for (auto &entry : entries)
 		{
-			auto head = top.load(memory_order_relaxed);
-			if (nullptr == head)
-				return 0;
-			if (head != top.load(memory_order_relaxed))
-				continue;
-			if (true == CAS(top, head, head->next))
-				return head->key;
-			int result = eliminationArray[node_id]->visit(0);
-			if (0 == result)
-				continue; // pop끼리 교환되면 계속 시도
-			if (-1 == result)
-				eliminationArray[node_id]->shrink(); // timeout 됨.
+			if (entry->op == 0)
+			{
+				if (pops.empty())
+					pushes.emplace_back(entry.get());
+				else
+				{
+					auto &pop_entry = *pops.back();
+					pop_entry.value = entry->value;
+					entry->is_finished.store(true, memory_order_release);
+					pop_entry.is_finished.store(true, memory_order_release);
+					pops.pop_back();
+				}
+			}
 			else
-				return result;
+			{
+				if (pushes.empty())
+					pops.emplace_back(entry.get());
+				else
+				{
+					auto &push_entry = *pushes.back();
+					push_entry.value = entry->value;
+					entry->is_finished.store(true, memory_order_release);
+					push_entry.is_finished.store(true, memory_order_release);
+					pushes.pop_back();
+				}
+			}
 		}
+		for (auto entry : pushes)
+			result.emplace_back(entry);
+		for (auto entry : pops)
+			result.emplace_back(entry);
+		return result;
 	}
 
-	void clear()
+private:
+	vector<unique_ptr<Exchanger>> entries;
+};
+
+void global_helper_func(shared_ptr<vector<unique_ptr<EliminationArray, DeallocNUMA<EliminationArray>>>> arr, shared_ptr<stack<int>> stack)
+{
+	while (true)
 	{
-		auto old_top = top.load(memory_order_relaxed);
-		if (nullptr == old_top)
-			return;
-		while (old_top->next != nullptr)
+		for (auto &arr_ptr : *arr)
 		{
-			Node *tmp = old_top;
-			top.store(old_top->next);
-			delete tmp;
+			auto remain_ops = arr_ptr->process_ops();
+			for (auto &op : remain_ops)
+			{
+				if (op->is_finished.load(memory_order_acquire) == true)
+					continue;
+
+				if (op->op == 0)
+				{
+					stack->push(op->value);
+				}
+				else if (stack->empty() == false)
+				{
+					op->value = stack->top();
+					stack->pop();
+				} else {
+					op->value = -1;
+				}
+				op->is_finished.store(true, memory_order_release);
+			}
 		}
-		delete top;
-		top = nullptr;
+	}
+}
+
+// Elimination + Delegation
+class EDStack
+{
+public:
+	EDStack(unsigned cores_per_node, unsigned nodes_num) : cores_per_node{cores_per_node},
+														   per_node_arrays{make_shared<vector<unique_ptr<EliminationArray, DeallocNUMA<EliminationArray>>>>(nodes_num)},
+														   inner_stack{make_shared<stack<int>>()}
+	{
+		auto idx = 0;
+		for (auto &arr : *per_node_arrays)
+		{
+			arr = unique_ptr<EliminationArray, DeallocNUMA<EliminationArray>>{NUMA_alloc<EliminationArray>(idx++, cores_per_node), DeallocNUMA<EliminationArray>{}};
+		}
+		global_helper = thread{global_helper_func, per_node_arrays, inner_stack};
+		global_helper.detach();
 	}
 
-	void dump(size_t count)
+	void push(int value)
 	{
-		auto ptr = top.load(memory_order_relaxed);
-		cout << count << " Result : ";
-		for (auto i = 0; i < count; ++i)
+		const auto node_id = get_node_id(tid);
+		(*per_node_arrays)[node_id]->push(value, tid % cores_per_node);
+	}
+	int pop()
+	{
+		const auto node_id = get_node_id(tid);
+		return (*per_node_arrays)[node_id]->pop(tid % cores_per_node);
+	}
+	void dump(unsigned num)
+	{
+		for (auto i = 0; i < num; ++i)
 		{
-			if (nullptr == ptr)
+			if (inner_stack->empty())
 				break;
-			cout << ptr->key << ", ";
-			ptr = ptr->next.load(memory_order_relaxed);
+			fprintf(stderr, "%d, ", inner_stack->top());
+			inner_stack->pop();
 		}
-		cout << "\n";
+		fprintf(stderr, "\n");
 	}
-} myStack;
 
-void benchMark(int num_thread)
+private:
+	const unsigned cores_per_node;
+	shared_ptr<vector<unique_ptr<EliminationArray, DeallocNUMA<EliminationArray>>>> per_node_arrays;
+	thread global_helper;
+	shared_ptr<stack<int>> inner_stack;
+};
+
+// Lock-Free Elimination BackOff Stack
+
+void benchMark(EDStack& myStack, int num_thread)
 {
 	if (-1 == numa_run_on_node(get_node_id(tid)))
 	{
@@ -254,11 +232,11 @@ void benchMark(int num_thread)
 	{
 		if ((fast_rand() % 2) || i <= 1000 / num_thread)
 		{
-			myStack.Push(i);
+			myStack.push(i);
 		}
 		else
 		{
-			myStack.Pop();
+			myStack.pop();
 		}
 	}
 }
@@ -277,10 +255,12 @@ int main(int argc, char *argv[])
 		exit(-1);
 	}
 
+	EDStack myStack{num_thread/NODE_NUM, NODE_NUM};
+
 	vector<thread> worker;
 	auto start_t = chrono::high_resolution_clock::now();
 	for (int i = 0; i < num_thread; ++i)
-		worker.emplace_back(benchMark, num_thread);
+		worker.emplace_back(benchMark, ref(myStack), num_thread);
 	for (auto &th : worker)
 		th.join();
 	auto du = chrono::high_resolution_clock::now() - start_t;
