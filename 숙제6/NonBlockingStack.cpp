@@ -255,7 +255,7 @@ int main(int argc, char *argv[])
 		exit(-1);
 	}
 
-	EDStack myStack{num_thread/NODE_NUM, NODE_NUM};
+	EDStack myStack{max(CPU_NUM, num_thread)/NODE_NUM, NODE_NUM};
 
 	vector<thread> worker;
 	auto start_t = chrono::high_resolution_clock::now();
