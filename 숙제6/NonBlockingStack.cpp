@@ -63,7 +63,7 @@ unsigned get_node_id(unsigned tid)
 	return (tid / core_per_node) % NODE_NUM;
 }
 
-constexpr unsigned ELIMINATION_WAIT_TIME = 10;
+constexpr unsigned POP_WAIT_TIME = 100;
 
 struct EliminationSlot
 {
@@ -99,7 +99,7 @@ public:
 		auto my_slot = entries[idx].get();
 		auto next_slot = my_slot->next;
 
-		for (auto try_count = 0; try_count < ELIMINATION_WAIT_TIME; ++try_count)
+		for (auto try_count = 0; try_count < entries.size()*2; ++try_count)
 		{
 			auto my_old_value = my_slot->value.load(memory_order_relaxed);
 			if (my_old_value == nullptr)
@@ -135,24 +135,16 @@ public:
 				break;
 		}
 
-		for (auto try_count = 0; try_count < ELIMINATION_WAIT_TIME; ++try_count)
-		{
-			auto val = my_slot->value.load(memory_order_relaxed);
-			if (val != nullptr)
-			{
-				auto ret_val = *val;
-				my_slot->value.store(EliminationSlot::EMPTY_VALUE, memory_order_relaxed);
-				delete val;
-				return ret_val;
-			}
-		}
+		for (volatile auto i = 0; i < POP_WAIT_TIME; ++i)
+			;
 
-		int *old_val = nullptr;
-		if (false == my_slot->value.compare_exchange_strong(old_val, EliminationSlot::EMPTY_VALUE))
+		auto val = my_slot->value.load(memory_order_relaxed);
+		if (val != nullptr ||
+			false == my_slot->value.compare_exchange_strong(val, EliminationSlot::EMPTY_VALUE))
 		{
-			auto ret_val = *old_val;
+			auto ret_val = *val;
 			my_slot->value.store(EliminationSlot::EMPTY_VALUE, memory_order_relaxed);
-			delete old_val;
+			delete val;
 			return ret_val;
 		}
 
@@ -168,67 +160,71 @@ struct Slot
 {
 	unsigned op;		  // 0 == push, 1 == pop
 	int *value = nullptr; // push일 때 넣을 값, pop일 때 받은 값
-	atomic_bool is_finished{true};
-	mutex lock;
 };
 class SlotArray
 {
 public:
-	SlotArray(unsigned entry_num) : entries{entry_num}, el_array{CPU_NUM / NODE_NUM}
+	SlotArray(unsigned entry_num) : entries{entry_num}, el_array{entry_num}
 	{
-		for (auto &entry : entries)
-		{
-			entry.reset(new Slot);
-		}
 	}
 
 	// 일반 thread가 호출할 methods
 	void push(int value, unsigned idx)
 	{
 		int *value_ptr = new int{value};
+
+		Slot *old_entry = nullptr;
+		auto my_slot = new Slot;
+		my_slot->value = value_ptr;
+		my_slot->op = 0;
+
+		auto &entry = entries[idx];
 		while (true)
 		{
 			if (el_array.push(value_ptr, idx))
 				return;
 
-			auto &entry = entries[idx];
-			unique_lock<mutex> lg{entry->lock, try_to_lock};
-			if (!lg)
+			if (entry.load(memory_order_relaxed) != nullptr)
+				continue;
+			if (false == entry.compare_exchange_strong(old_entry, my_slot))
 				continue;
 
-			entry->value = value_ptr;
-			entry->op = 0;
-			entry->is_finished.store(false, memory_order_release);
-			while (entry->is_finished.load(memory_order_acquire) == false)
+			while (entry.load(memory_order_relaxed) != nullptr)
 				;
+
+			delete value_ptr;
+			delete my_slot;
 			return;
 		}
 	}
 	optional<int> pop(unsigned idx)
 	{
+		auto my_slot = new Slot;
+		my_slot->op = 1;
+
+		auto &entry = entries[idx];
 		while (true)
 		{
 			auto result = el_array.pop(idx);
 			if (result)
 				return result;
 
-			auto &entry = entries[idx];
-			unique_lock<mutex> lg{entry->lock, try_to_lock};
-			if (!lg)
+			Slot *old_entry = entry.load(memory_order_relaxed);
+			if (old_entry != nullptr)
+				continue;
+			if (false == entry.compare_exchange_strong(old_entry, my_slot))
 				continue;
 
-			entry->op = 1;
-			entry->is_finished.store(false, memory_order_release);
-			while (entry->is_finished.load(memory_order_acquire) == false)
+			while (entry.load(memory_order_acquire) != nullptr)
 				;
 
-			if (entry->value == nullptr)
+			if (my_slot->value == nullptr)
 				return nullopt;
 
-			auto ret_val = *entry->value;
-			delete entry->value;
-			entry->value = nullptr;
-			return *entry->value;
+			auto ret_val = *my_slot->value;
+			delete my_slot->value;
+			delete my_slot;
+			return ret_val;
 		}
 	}
 
@@ -237,30 +233,29 @@ public:
 	{
 		for (auto &op : entries)
 		{
-			auto is_finished = op->is_finished.load(memory_order_acquire);
-			if (is_finished == true)
+			auto slot = op.load(memory_order_acquire);
+			if (slot == nullptr)
 				continue;
-			auto op_type = op->op;
 
-			if (op_type == 0)
+			if (slot->op == 0)
 			{
-				stack.push(*op->value);
+				stack.push(*slot->value);
 			}
 			else if (stack.empty() == false)
 			{
-				op->value = new int{stack.top()};
+				slot->value = new int{stack.top()};
 				stack.pop();
 			}
 			else
 			{
-				op->value = nullptr;
+				slot->value = nullptr;
 			}
-			op->is_finished.store(true, memory_order_release);
+			op.store(nullptr, memory_order_release);
 		}
 	}
 
 private:
-	vector<unique_ptr<Slot>> entries;
+	vector<atomic<Slot *>> entries;
 	EliminationArray el_array;
 };
 
