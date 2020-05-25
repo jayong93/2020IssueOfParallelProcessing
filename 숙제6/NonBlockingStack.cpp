@@ -59,7 +59,7 @@ static atomic_uint tid_counter{0};
 static thread_local unsigned tid = tid_counter.fetch_add(1, memory_order_relaxed);
 unsigned get_node_id(unsigned tid)
 {
-	auto core_per_node = (CPU_NUM/2) / NODE_NUM;
+	auto core_per_node = (CPU_NUM / 2) / NODE_NUM;
 	return (tid / core_per_node) % NODE_NUM;
 }
 
@@ -160,6 +160,7 @@ struct Slot
 	unsigned op;		  // 0 == push, 1 == pop
 	int *value = nullptr; // push일 때 넣을 값, pop일 때 받은 값
 	atomic_bool is_finished{true};
+	mutex lock;
 };
 class SlotArray
 {
@@ -176,35 +177,50 @@ public:
 	void push(int value, unsigned idx)
 	{
 		int *value_ptr = new int{value};
-		if (el_array.push(value_ptr, idx))
-			return;
+		while (true)
+		{
+			if (el_array.push(value_ptr, idx))
+				return;
 
-		auto &entry = entries[idx];
-		entry->value = value_ptr;
-		entry->op = 0;
-		entry->is_finished.store(false, memory_order_release);
-		while (entry->is_finished.load(memory_order_acquire) == false)
-			;
+			auto &entry = entries[idx];
+			unique_lock<mutex> lg{entry->lock, try_to_lock};
+			if (!lg)
+				continue;
+
+			entry->value = value_ptr;
+			entry->op = 0;
+			entry->is_finished.store(false, memory_order_release);
+			while (entry->is_finished.load(memory_order_acquire) == false)
+				;
+			return;
+		}
 	}
 	optional<int> pop(unsigned idx)
 	{
-		auto result = el_array.pop(idx);
-		if (result)
-			return result;
+		while (true)
+		{
+			auto result = el_array.pop(idx);
+			if (result)
+				return result;
 
-		auto &entry = entries[idx];
-		entry->op = 1;
-		entry->is_finished.store(false, memory_order_release);
-		while (entry->is_finished.load(memory_order_acquire) == false)
-			;
+			auto &entry = entries[idx];
+			unique_lock<mutex> lg{entry->lock, try_to_lock};
+			if (!lg)
+				continue;
 
-		if (entry->value == nullptr)
-			return nullopt;
+			entry->op = 1;
+			entry->is_finished.store(false, memory_order_release);
+			while (entry->is_finished.load(memory_order_acquire) == false)
+				;
 
-		auto ret_val = *entry->value;
-		delete entry->value;
-		entry->value = nullptr;
-		return *entry->value;
+			if (entry->value == nullptr)
+				return nullopt;
+
+			auto ret_val = *entry->value;
+			delete entry->value;
+			entry->value = nullptr;
+			return *entry->value;
+		}
 	}
 
 	// helper thread가 호출할 methods
@@ -336,7 +352,8 @@ int main(int argc, char *argv[])
 		exit(-1);
 	}
 
-	EDStack myStack{max(CPU_NUM, num_thread) / NODE_NUM, NODE_NUM};
+	auto core_per_node = (CPU_NUM / 2) / NODE_NUM;
+	EDStack myStack{max(CPU_NUM, num_thread) / NODE_NUM, min(max(num_thread / core_per_node, 1u), NODE_NUM)};
 
 	vector<thread> worker;
 	auto start_t = chrono::high_resolution_clock::now();
