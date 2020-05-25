@@ -6,6 +6,7 @@
 #include <atomic>
 #include <algorithm>
 #include <iterator>
+#include <optional>
 #include <chrono>
 #include <memory>
 #include <stack>
@@ -58,11 +59,11 @@ static atomic_uint tid_counter{0};
 static thread_local unsigned tid = tid_counter.fetch_add(1, memory_order_relaxed);
 unsigned get_node_id(unsigned tid)
 {
-	auto core_per_node = CPU_NUM / NODE_NUM;
+	auto core_per_node = (CPU_NUM/2) / NODE_NUM;
 	return (tid / core_per_node) % NODE_NUM;
 }
 
-constexpr unsigned ELIMINATION_WAIT_TIME = 100;
+constexpr unsigned ELIMINATION_WAIT_TIME = 10;
 
 struct EliminationSlot
 {
