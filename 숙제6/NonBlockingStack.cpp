@@ -135,7 +135,6 @@ public:
 				break;
 		}
 
-		my_slot->value.store(nullptr, memory_order_relaxed);
 		for (auto try_count = 0; try_count < ELIMINATION_WAIT_TIME; ++try_count)
 		{
 			auto val = my_slot->value.load(memory_order_relaxed);
