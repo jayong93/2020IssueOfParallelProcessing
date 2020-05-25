@@ -62,107 +62,103 @@ unsigned get_node_id(unsigned tid)
 	return (tid / core_per_node) % NODE_NUM;
 }
 
-class Exchanger
+constexpr unsigned ELIMINATION_WAIT_TIME = 100;
+
+struct EliminationSlot
 {
-	volatile int value; // status와 교환값의 합성.
+	atomic<int *> value = EMPTY_VALUE;
+	EliminationSlot *next = nullptr;
 
-	enum Status
-	{
-		EMPTY,
-		WAIT,
-		BUSY
-	};
-	bool CAS(int oldValue, int newValue, Status oldStatus, Status newStatus)
-	{
-		int oldV = oldValue << 2 | (int)oldStatus;
-		int newV = newValue << 2 | (int)newStatus;
-		return atomic_compare_exchange_strong(reinterpret_cast<atomic_int volatile *>(&value), &oldV, newV);
-	}
+	static int *const EMPTY_VALUE;
 
-public:
-	int exchange(int x)
+	~EliminationSlot()
 	{
-		while (true)
-		{
-			switch (Status(value & 0x3))
-			{
-			case EMPTY:
-			{
-				int tempVal = value >> 2;
-				if (false == CAS(tempVal, x, EMPTY, WAIT))
-					continue;
-
-				/* BUSY가 될 때까지 기다리며 timeout된 경우 -1 반환 */
-				int count;
-				for (count = 0; count < 100; ++count)
-				{
-					if (Status(value & 0x3) == BUSY)
-					{
-						int ret = value >> 2;
-						value = EMPTY;
-						return ret;
-					}
-				}
-				if (false == CAS(tempVal, 0, WAIT, EMPTY))
-				{ // 그 사이에 누가 들어온 경우
-					int ret = value >> 2;
-					value = EMPTY;
-					return ret;
-				}
-				return -1;
-			}
-			break;
-			case WAIT:
-			{
-				int temp = value >> 2;
-				if (false == CAS(temp, x, WAIT, BUSY))
-					break;
-				return temp;
-			}
-			break;
-			case BUSY:
-				if (exSize < MAX_THREAD)
-				{
-					exSize += 1;
-				}
-				return x;
-			default:
-				fprintf(stderr, "It's impossible case\n");
-				exit(1);
-			}
-		}
+		if (value != EMPTY_VALUE && value != nullptr)
+			delete value;
 	}
 };
 
+int *const EliminationSlot::EMPTY_VALUE = new int{0};
+
 class EliminationArray
 {
-	vector<Exchanger> exchanger;
-
 public:
-	EliminationArray(unsigned exchanger_num) : exchanger{exchanger_num} {}
-
-	int visit(int x)
+	EliminationArray(unsigned num_entry) : num_entry{num_entry}
 	{
-		if (exchanger.size() < exSize)
+		for (auto i = 0; i < num_entry; ++i)
+			entries.emplace_back(new EliminationSlot);
+		for (auto i = 0; i < num_entry; ++i)
 		{
-			exSize = exchanger.size();
+			entries[i]->next = entries[(i + 1) % num_entry].get();
 		}
-		int index = rand() % exSize;
-		return exchanger[index].exchange(x);
 	}
 
-	void shrink()
+	bool push(int *value, unsigned idx)
 	{
-		if (exSize > 1)
-			exSize -= 1;
+		auto my_slot = entries[idx].get();
+		auto next_slot = my_slot->next;
+
+		for (auto try_count = 0; try_count < ELIMINATION_WAIT_TIME; ++try_count)
+		{
+			auto my_old_value = my_slot->value.load(memory_order_relaxed);
+			if (my_old_value == nullptr)
+			{
+				if (my_slot->value.compare_exchange_strong(my_old_value, value))
+					return true;
+			}
+			else
+			{
+				auto next_old_value = next_slot->value.load(memory_order_relaxed);
+				if (next_old_value == nullptr)
+				{
+					if (next_slot->value.compare_exchange_strong(next_old_value, value))
+						return true;
+					next_slot = next_slot->next;
+				}
+			}
+		}
+
+		return false;
 	}
+
+	optional<int> pop(unsigned idx)
+	{
+		auto my_slot = entries[idx].get();
+		my_slot->value.store(nullptr, memory_order_relaxed);
+		for (auto try_count = 0; try_count < ELIMINATION_WAIT_TIME; ++try_count)
+		{
+			auto val = my_slot->value.load(memory_order_relaxed);
+			if (val != nullptr)
+			{
+				auto ret_val = *val;
+				my_slot->value.store(EliminationSlot::EMPTY_VALUE, memory_order_relaxed);
+				delete val;
+				return ret_val;
+			}
+		}
+
+		int *old_val = nullptr;
+		if (false == my_slot->value.compare_exchange_strong(old_val, EliminationSlot::EMPTY_VALUE))
+		{
+			auto ret_val = *old_val;
+			my_slot->value.store(EliminationSlot::EMPTY_VALUE, memory_order_relaxed);
+			delete old_val;
+			return ret_val;
+		}
+
+		return nullopt;
+	}
+
+private:
+	vector<unique_ptr<EliminationSlot>> entries;
+	const unsigned num_entry;
 };
 
 struct Slot
 {
-	unsigned op;				   // 0 == push, 1 == pop
-	unsigned value;				   // push일 때 넣을 값, pop일 때 받은 값
-	atomic_bool is_finished{true}; // 완료되었을 때 true로 바뀜.
+	unsigned op;		  // 0 == push, 1 == pop
+	int *value = nullptr; // push일 때 넣을 값, pop일 때 받은 값
+	atomic_bool is_finished{true};
 };
 class SlotArray
 {
@@ -178,21 +174,36 @@ public:
 	// 일반 thread가 호출할 methods
 	void push(int value, unsigned idx)
 	{
+		int *value_ptr = new int{value};
+		if (el_array.push(value_ptr, idx))
+			return;
+
 		auto &entry = entries[idx];
-		entry->value = value;
+		entry->value = value_ptr;
 		entry->op = 0;
 		entry->is_finished.store(false, memory_order_release);
 		while (entry->is_finished.load(memory_order_acquire) == false)
 			;
 	}
-	int pop(unsigned idx)
+	optional<int> pop(unsigned idx)
 	{
+		auto result = el_array.pop(idx);
+		if (result)
+			return result;
+
 		auto &entry = entries[idx];
 		entry->op = 1;
 		entry->is_finished.store(false, memory_order_release);
 		while (entry->is_finished.load(memory_order_acquire) == false)
 			;
-		return entry->value;
+
+		if (entry->value == nullptr)
+			return nullopt;
+
+		auto ret_val = *entry->value;
+		delete entry->value;
+		entry->value = nullptr;
+		return *entry->value;
 	}
 
 	// helper thread가 호출할 methods
@@ -200,21 +211,23 @@ public:
 	{
 		for (auto &op : entries)
 		{
-			if (op->is_finished.load(memory_order_acquire) == true)
+			auto is_finished = op->is_finished.load(memory_order_acquire);
+			if (is_finished == true)
 				continue;
+			auto op_type = op->op;
 
-			if (op->op == 0)
+			if (op_type == 0)
 			{
-				stack.push(op->value);
+				stack.push(*op->value);
 			}
 			else if (stack.empty() == false)
 			{
-				op->value = stack.top();
+				op->value = new int{stack.top()};
 				stack.pop();
 			}
 			else
 			{
-				op->value = -1;
+				op->value = nullptr;
 			}
 			op->is_finished.store(true, memory_order_release);
 		}
@@ -231,6 +244,7 @@ void global_helper_func(shared_ptr<vector<unique_ptr<SlotArray, DeallocNUMA<Slot
 	{
 		for (auto &arr_ptr : *arr)
 		{
+			arr_ptr->process_ops(*stack);
 		}
 	}
 }
@@ -254,13 +268,11 @@ public:
 
 	void push(int value)
 	{
-		const auto node_id = get_node_id(tid);
-		(*per_node_arrays)[node_id]->push(value, tid % cores_per_node);
+		get_local_array()->push(value, tid % cores_per_node);
 	}
-	int pop()
+	optional<int> pop()
 	{
-		const auto node_id = get_node_id(tid);
-		return (*per_node_arrays)[node_id]->pop(tid % cores_per_node);
+		return get_local_array()->pop(tid % cores_per_node);
 	}
 	void dump(unsigned num)
 	{
@@ -279,6 +291,12 @@ private:
 	shared_ptr<vector<unique_ptr<SlotArray, DeallocNUMA<SlotArray>>>> per_node_arrays;
 	thread global_helper;
 	shared_ptr<stack<int>> inner_stack;
+
+	SlotArray *get_local_array()
+	{
+		static thread_local SlotArray *local_array = (*per_node_arrays)[get_node_id(tid)].get();
+		return local_array;
+	}
 };
 
 // Lock-Free Elimination BackOff Stack
