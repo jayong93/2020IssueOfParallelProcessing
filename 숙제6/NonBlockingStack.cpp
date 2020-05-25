@@ -166,6 +166,10 @@ class SlotArray
 public:
 	SlotArray(unsigned entry_num) : entries{entry_num}, el_array{entry_num}
 	{
+		for(auto& entry : entries)
+		{
+			entry.reset(new atomic<Slot*>);
+		}
 	}
 
 	// 일반 thread가 호출할 methods
@@ -184,12 +188,12 @@ public:
 			if (el_array.push(value_ptr, idx))
 				return;
 
-			if (entry.load(memory_order_relaxed) != nullptr)
+			if (entry->load(memory_order_relaxed) != nullptr)
 				continue;
-			if (false == entry.compare_exchange_strong(old_entry, my_slot))
+			if (false == entry->compare_exchange_strong(old_entry, my_slot))
 				continue;
 
-			while (entry.load(memory_order_relaxed) != nullptr)
+			while (entry->load(memory_order_relaxed) != nullptr)
 				;
 
 			delete value_ptr;
@@ -209,13 +213,13 @@ public:
 			if (result)
 				return result;
 
-			Slot *old_entry = entry.load(memory_order_relaxed);
+			Slot *old_entry = entry->load(memory_order_relaxed);
 			if (old_entry != nullptr)
 				continue;
-			if (false == entry.compare_exchange_strong(old_entry, my_slot))
+			if (false == entry->compare_exchange_strong(old_entry, my_slot))
 				continue;
 
-			while (entry.load(memory_order_acquire) != nullptr)
+			while (entry->load(memory_order_acquire) != nullptr)
 				;
 
 			if (my_slot->value == nullptr)
@@ -233,7 +237,7 @@ public:
 	{
 		for (auto &op : entries)
 		{
-			auto slot = op.load(memory_order_acquire);
+			auto slot = op->load(memory_order_acquire);
 			if (slot == nullptr)
 				continue;
 
@@ -250,12 +254,12 @@ public:
 			{
 				slot->value = nullptr;
 			}
-			op.store(nullptr, memory_order_release);
+			op->store(nullptr, memory_order_release);
 		}
 	}
 
 private:
-	vector<atomic<Slot *>> entries;
+	vector<unique_ptr<atomic<Slot *>>> entries;
 	EliminationArray el_array;
 };
 
