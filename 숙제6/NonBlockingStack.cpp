@@ -125,6 +125,16 @@ public:
 	optional<int> pop(unsigned idx)
 	{
 		auto my_slot = entries[idx].get();
+
+		while (true)
+		{
+			auto free_ptr = EliminationSlot::EMPTY_VALUE;
+			if (false == my_slot->value.compare_exchange_strong(free_ptr, nullptr))
+				my_slot = my_slot->next;
+			else
+				break;
+		}
+
 		my_slot->value.store(nullptr, memory_order_relaxed);
 		for (auto try_count = 0; try_count < ELIMINATION_WAIT_TIME; ++try_count)
 		{
