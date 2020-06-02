@@ -17,7 +17,7 @@ constexpr unsigned MAX_HEIGHT = 10;
 struct SKNode {
     long key, value;
     unsigned height;
-    std::atomic<SKNodeState> state;
+    volatile SKNodeState state;
     volatile SKNode *next[MAX_HEIGHT];
 
     SKNode(long key, long value)

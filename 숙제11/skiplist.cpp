@@ -93,9 +93,9 @@ optional<long> HTMSkiplist::find(long key) {
             break;
     }
     if (key == curr->key) {
-        while (curr->state.load(memory_order_relaxed) == INITIAL)
+        while (curr->state == INITIAL)
             ;
-        if (curr->state.load(memory_order_relaxed) == REMOVED)
+        if (curr->state == REMOVED)
             return nullopt;
         return curr->value;
     } else
@@ -121,9 +121,9 @@ HTMResult HTMSkiplist::insert_htm(SKNode &node) {
         succs[h] = curr;
     }
     if (key == curr->key) {
-        while (curr->state.load(memory_order_relaxed) == INITIAL)
+        while (curr->state == INITIAL)
             ;
-        if (curr->state.load(memory_order_relaxed) == REMOVED)
+        if (curr->state == REMOVED)
             return HTMResult::HTMAbort;
         return HTMResult::Fail; // if node exists , we return
     }
@@ -137,8 +137,8 @@ HTMResult HTMSkiplist::insert_htm(SKNode &node) {
     // check consistency
     for (int h = 0; h < nodeHeight; h++) {
         if (preds[h]->next[h] != succs[h] ||
-            preds[h]->state.load(memory_order_relaxed) == REMOVED ||
-            succs[h]->state.load(memory_order_relaxed) == REMOVED) {
+            preds[h]->state == REMOVED ||
+            succs[h]->state == REMOVED) {
             // force an abort
             if (_xtest())
                 _xabort(0xaa);
@@ -157,7 +157,7 @@ HTMResult HTMSkiplist::insert_htm(SKNode &node) {
         preds[h]->next[h] = &node;
     }
 
-    node.state.store(INSERTED, memory_order_release);
+    node.state = INSERTED;
     // commit
     if (_xtest())
         _xend();
@@ -189,7 +189,7 @@ bool HTMSkiplist::insert_seq(SKNode &node) {
         updateArr[h]->next[h] = &node;
     }
 
-    node.state.store(INSERTED, memory_order_release);
+    node.state = INSERTED;
     return 1;
 }
 
@@ -220,7 +220,7 @@ HTMResult HTMSkiplist::remove_htm(long key) {
         // check consistency
         for (int h = 0; h < nodeHeight; h++) {
             if (preds[h]->next[h] != curr ||
-                preds[h]->state.load(memory_order_relaxed) == REMOVED) {
+                preds[h]->state == REMOVED) {
                 // force an abort
                 if (_xtest())
                     _xabort(0xaa);
@@ -231,7 +231,7 @@ HTMResult HTMSkiplist::remove_htm(long key) {
         }
 
         // update fields
-        curr->state.store(REMOVED, memory_order_relaxed);
+        curr->state = REMOVED;
         for (int h = 0; h < nodeHeight; h++) {
             preds[h]->next[h] = curr->next[h];
         }
@@ -267,7 +267,7 @@ bool HTMSkiplist::remove_seq(long key) {
     if (curr->key == key) {
         auto nodeHeight = curr->height;
         // update fields
-        curr->state.store(REMOVED, memory_order_relaxed);
+        curr->state = REMOVED;
         for (int h = 0; h < nodeHeight; h++) {
             updateArr[h]->next[h] = curr->next[h];
         }
