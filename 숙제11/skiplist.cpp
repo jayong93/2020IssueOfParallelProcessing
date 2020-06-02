@@ -74,10 +74,10 @@ HTMResult HTMSkiplist::insert_htm(SKNode &node) {
 
     pred = this->head;
     for (int h = MAX_HEIGHT - 1; h >= 0; h--) {
-        curr = pred->next[h];
+        curr = pred->next[h].load(memory_order_relaxed);
         while (key > curr->key) {
             pred = curr;
-            curr = pred->next[h];
+            curr = pred->next[h].load(memory_order_relaxed);
         }
         preds[h] = pred;
         succs[h] = curr;
@@ -115,7 +115,7 @@ HTMResult HTMSkiplist::insert_htm(SKNode &node) {
     auto nodeHeight = node.height;
     // check consistency
     for (int h = 0; h < nodeHeight; h++) {
-        if (preds[h]->next[h] != succs[h] || preds[h]->state == REMOVED ||
+        if (preds[h]->next[h].load(memory_order_relaxed) != succs[h] || preds[h]->state == REMOVED ||
             succs[h]->state == REMOVED) {
             // force an abort
             if (_xtest())
@@ -165,7 +165,7 @@ bool HTMSkiplist::insert_seq(SKNode &node) {
     for (int h = 0; h < nodeHeight; h++) {
         node.next[h].store(updateArr[h]->next[h].load(memory_order_relaxed),
                            memory_order_relaxed);
-        updateArr[h]->next[h].store(&node);
+        updateArr[h]->next[h].store(&node, memory_order_relaxed);
     }
 
     node.state.store(INSERTED, memory_order_release);
