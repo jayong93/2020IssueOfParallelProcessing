@@ -18,10 +18,6 @@ unique_lock<mutex> try_to_start_tx(mutex &lock, bool &is_force_aborted) {
 
         auto status = _xbegin();
         if (status == _XBEGIN_STARTED) {
-            lg = unique_lock{lock, try_to_lock};
-            if (!lg)
-                _xabort(0xaa);
-            lg.unlock();
             break;
         }
         else if (status & 0x2 == 1) {
@@ -41,6 +37,8 @@ unique_lock<mutex> try_to_start_tx(mutex &lock, bool &is_force_aborted) {
                 is_force_aborted = true;
                 break;
             }
+        } else {
+            fprintf(stderr, "Unknown abort : %d\n", status);
         }
 
         try_count++;
