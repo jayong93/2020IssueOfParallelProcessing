@@ -20,8 +20,14 @@ struct SKNode {
     volatile SKNodeState state;
     volatile SKNode *next[MAX_HEIGHT];
 
-    SKNode(long key, long value)
-        : SKNode{key, value, (unsigned)fast_rand() % MAX_HEIGHT + 1} {}
+    SKNode(long key, long value) : SKNode{key, value, 1} {
+        for (int i = 0; i < MAX_HEIGHT - 1; ++i) {
+            if (fast_rand() % 100 < 50)
+                height++;
+            else
+                break;
+        }
+    }
     SKNode(long key, long value, unsigned height)
         : next{}, state{INITIAL}, height{height}, key{key}, value{value} {
         for (auto i = 0; i < MAX_HEIGHT; ++i)
