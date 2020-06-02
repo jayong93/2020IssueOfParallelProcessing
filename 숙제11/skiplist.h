@@ -36,6 +36,8 @@ class HTMSkiplist {
     HTMSkiplist()
         : head{new SKNode{LONG_MIN, LONG_MIN, MAX_HEIGHT}},
           tail{new SKNode{LONG_MAX, LONG_MAX, MAX_HEIGHT}} {
+        head->state = INSERTED;
+        tail->state = INSERTED;
         for (auto i = 0; i < MAX_HEIGHT; ++i)
             head->next[i] = tail;
     }

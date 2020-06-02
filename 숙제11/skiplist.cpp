@@ -17,7 +17,7 @@ unique_lock<mutex> try_to_start_tx(mutex &lock, bool &is_force_aborted) {
         }
 
         auto status = _xbegin();
-        if (status == _XBEGIN_STARTED) {
+        if ((unsigned)status == _XBEGIN_STARTED) {
             break;
         } else if ((status & 0x2) != 0) {
             fprintf(stderr, "Closed to success\n");
@@ -81,13 +81,13 @@ bool HTMSkiplist::remove(long key) {
 }
 
 optional<long> HTMSkiplist::find(long key) {
-    volatile SKNode *curr, *prev;
+    SKNode *curr, *prev;
     prev = this->head;
     for (int i = MAX_HEIGHT - 1; i >= 0; --i) {
-        curr = prev->next[i];
+        curr = (SKNode*)prev->next[i];
         while (key > curr->key) {
             prev = curr;
-            curr = prev->next[i];
+            curr = (SKNode*)prev->next[i];
         }
         if (key == curr->key)
             break;
@@ -103,19 +103,19 @@ optional<long> HTMSkiplist::find(long key) {
 }
 
 HTMResult HTMSkiplist::insert_htm(SKNode &node) {
-    volatile SKNode *preds[MAX_HEIGHT];
-    volatile SKNode *succs[MAX_HEIGHT];
-    volatile SKNode *curr;
-    volatile SKNode *pred;
+    SKNode *preds[MAX_HEIGHT];
+    SKNode *succs[MAX_HEIGHT];
+    SKNode *curr;
+    SKNode *pred;
 
     long key = node.key;
 
     pred = this->head;
     for (int h = MAX_HEIGHT - 1; h >= 0; h--) {
-        curr = pred->next[h];
+        curr = (SKNode*)pred->next[h];
         while (key > curr->key) {
             pred = curr;
-            curr = pred->next[h];
+            curr = (SKNode*)pred->next[h];
         }
         preds[h] = pred;
         succs[h] = curr;
@@ -167,15 +167,15 @@ HTMResult HTMSkiplist::insert_htm(SKNode &node) {
 bool HTMSkiplist::insert_seq(SKNode &node) {
     unique_lock<mutex> lg{this->lock};
 
-    volatile SKNode *updateArr[MAX_HEIGHT];
-    volatile SKNode *curr = this->head;
+    SKNode *updateArr[MAX_HEIGHT];
+    SKNode *curr = this->head;
     long key = node.key;
     unsigned nodeHeight = node.height;
 
     for (int h = MAX_HEIGHT - 1; h >= 0; h--) {
         auto cmpKey = curr->next[h]->key;
         while (cmpKey < key) {
-            curr = curr->next[h];
+            curr = (SKNode*)curr->next[h];
             cmpKey = (curr->next[h])->key;
         }
         updateArr[h] = curr;
@@ -194,17 +194,17 @@ bool HTMSkiplist::insert_seq(SKNode &node) {
 }
 
 HTMResult HTMSkiplist::remove_htm(long key) {
-    volatile SKNode *preds[MAX_HEIGHT];
-    volatile SKNode *curr;
-    volatile SKNode *pred;
+    SKNode *preds[MAX_HEIGHT];
+    SKNode *curr;
+    SKNode *pred;
 
     // find where the node is
     pred = this->head;
     for (int h = MAX_HEIGHT - 1; h >= 0; h--) {
-        curr = pred->next[h];
+        curr = (SKNode*)pred->next[h];
         while (key > curr->key) {
             pred = curr;
-            curr = pred->next[h];
+            curr = (SKNode*)pred->next[h];
         }
         preds[h] = pred;
     }
@@ -250,20 +250,20 @@ HTMResult HTMSkiplist::remove_htm(long key) {
 bool HTMSkiplist::remove_seq(long key) {
     unique_lock<mutex> lg{this->lock};
 
-    volatile SKNode *curr = this->head;
-    volatile SKNode *updateArr[MAX_HEIGHT];
+    SKNode *curr = this->head;
+    SKNode *updateArr[MAX_HEIGHT];
 
     // find where the node is
     for (int h = MAX_HEIGHT - 1; h >= 0; h--) {
         auto cmpKey = curr->next[h]->key;
         while (cmpKey < key) {
-            curr = curr->next[h];
+            curr = (SKNode*)curr->next[h];
             cmpKey = (curr->next[h])->key;
         }
         updateArr[h] = curr;
     }
 
-    curr = curr->next[0];
+    curr = (SKNode*)curr->next[0];
     if (curr->key == key) {
         auto nodeHeight = curr->height;
         // update fields
