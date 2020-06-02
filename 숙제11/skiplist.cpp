@@ -106,8 +106,10 @@ HTMResult HTMSkiplist::insert_htm(SKNode &node) {
             lg.unlock();
             break;
         }
-        if (_XABORT_CODE(status) == 0xaa)
+        if (status & 0x1 == 1 && _XABORT_CODE(status) == 0xaa) {
+            fprintf(stderr, "Force Aborted\n");
             return HTMResult::HTMAbort;
+        }
 
         try_count++;
     }
@@ -115,8 +117,8 @@ HTMResult HTMSkiplist::insert_htm(SKNode &node) {
     auto nodeHeight = node.height;
     // check consistency
     for (int h = 0; h < nodeHeight; h++) {
-        if (preds[h]->next[h].load(memory_order_relaxed) != succs[h] || preds[h]->state == REMOVED ||
-            succs[h]->state == REMOVED) {
+        if (preds[h]->next[h].load(memory_order_relaxed) != succs[h] ||
+            preds[h]->state == REMOVED || succs[h]->state == REMOVED) {
             // force an abort
             if (_xtest())
                 _xabort(0xaa);
@@ -204,8 +206,10 @@ HTMResult HTMSkiplist::remove_htm(long key) {
             lg.unlock();
             break;
         }
-        if (_XABORT_CODE(status) == 0xaa)
+        if (status & 0x1 == 1 && _XABORT_CODE(status) == 0xaa) {
+            fprintf(stderr, "Force Aborted\n");
             return HTMResult::HTMAbort;
+        }
 
         try_count++;
     }
