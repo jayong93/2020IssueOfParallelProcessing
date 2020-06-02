@@ -15,7 +15,7 @@ if (NOT CMAKE_BUILD_TYPE)
 endif()
 
 add_compile_options(-mrtm -g -ggdb -std=c++17)
-link_libraries(pthread numa)
+link_libraries(pthread)
 set(CMAKE_CXX_COMPILER "g++")
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY bin)
 

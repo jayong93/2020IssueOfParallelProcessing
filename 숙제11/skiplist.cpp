@@ -9,7 +9,7 @@ constexpr unsigned MAX_TX_TRY = 30;
 
 bool HTMSkiplist::insert(long key, long value) {
     SKNode *node = new SKNode{key, value};
-    for (auto i = 0; i < MAX_TRY; ++i) {
+    for (int i = 0; i < MAX_TRY; ++i) {
         switch (this->insert_htm(*node)) {
         case Success:
             return true;
@@ -28,7 +28,7 @@ bool HTMSkiplist::insert(long key, long value) {
 }
 
 bool HTMSkiplist::remove(long key) {
-    for (auto i = 0; i < MAX_TRY; ++i) {
+    for (int i = 0; i < MAX_TRY; ++i) {
         switch (this->remove_htm(key)) {
         case Success:
             return true;
@@ -45,7 +45,7 @@ bool HTMSkiplist::remove(long key) {
 optional<long> HTMSkiplist::find(long key) {
     SKNode *curr, *prev;
     prev = this->head;
-    for (auto i = MAX_HEIGHT - 1; i >= 0; --i) {
+    for (int i = MAX_HEIGHT - 1; i >= 0; --i) {
         curr = prev->next[i].load(memory_order_relaxed);
         while (key > curr->key) {
             prev = curr;
@@ -73,7 +73,7 @@ HTMResult HTMSkiplist::insert_htm(SKNode &node) {
     long key = node.key;
 
     pred = this->head;
-    for (auto h = MAX_HEIGHT - 1; h >= 0; h--) {
+    for (int h = MAX_HEIGHT - 1; h >= 0; h--) {
         curr = pred->next[h];
         while (key > curr->key) {
             pred = curr;
@@ -114,7 +114,7 @@ HTMResult HTMSkiplist::insert_htm(SKNode &node) {
 
     auto nodeHeight = node.height;
     // check consistency
-    for (auto h = 0; h < nodeHeight; h++) {
+    for (int h = 0; h < nodeHeight; h++) {
         if (preds[h]->next[h] != succs[h] || preds[h]->state == REMOVED ||
             succs[h]->state == REMOVED) {
             // force an abort
@@ -127,11 +127,11 @@ HTMResult HTMSkiplist::insert_htm(SKNode &node) {
     }
 
     // update fields
-    for (auto h = 0; h < nodeHeight; h++) {
+    for (int h = 0; h < nodeHeight; h++) {
         node.next[h].store(succs[h], memory_order_relaxed);
     }
 
-    for (auto h = 0; h < nodeHeight; h++) {
+    for (int h = 0; h < nodeHeight; h++) {
         preds[h]->next[h].store(&node, memory_order_relaxed);
     }
 
@@ -150,7 +150,7 @@ bool HTMSkiplist::insert_seq(SKNode &node) {
     long key = node.key;
     unsigned nodeHeight = node.height;
 
-    for (auto h = MAX_HEIGHT - 1; h >= 0; h--) {
+    for (int h = MAX_HEIGHT - 1; h >= 0; h--) {
         auto cmpKey = curr->next[h].load(memory_order_relaxed)->key;
         while (cmpKey < key) {
             curr = curr->next[h].load(memory_order_relaxed);
@@ -162,7 +162,7 @@ bool HTMSkiplist::insert_seq(SKNode &node) {
     if (curr->next[0].load(memory_order_relaxed)->key == key)
         return 0;
 
-    for (auto h = 0; h < nodeHeight; h++) {
+    for (int h = 0; h < nodeHeight; h++) {
         node.next[h].store(updateArr[h]->next[h].load(memory_order_relaxed),
                            memory_order_relaxed);
         updateArr[h]->next[h].store(&node);
@@ -179,7 +179,7 @@ HTMResult HTMSkiplist::remove_htm(long key) {
 
     // find where the node is
     pred = this->head;
-    for (auto h = MAX_HEIGHT - 1; h >= 0; h--) {
+    for (int h = MAX_HEIGHT - 1; h >= 0; h--) {
         curr = pred->next[h].load(memory_order_relaxed);
         while (key > curr->key) {
             pred = curr;
@@ -214,7 +214,7 @@ HTMResult HTMSkiplist::remove_htm(long key) {
     if (curr->key == key) {
         auto nodeHeight = curr->height;
         // check consistency
-        for (auto h = 0; h < nodeHeight; h++) {
+        for (int h = 0; h < nodeHeight; h++) {
             if (preds[h]->next[h].load(memory_order_relaxed) != curr ||
                 preds[h]->state == REMOVED) {
                 // force an abort
@@ -228,7 +228,7 @@ HTMResult HTMSkiplist::remove_htm(long key) {
 
         // update fields
         curr->state.store(REMOVED, memory_order_relaxed);
-        for (auto h = 0; h < nodeHeight; h++) {
+        for (int h = 0; h < nodeHeight; h++) {
             preds[h]->next[h].store(curr->next[h].load(memory_order_relaxed),
                                     memory_order_relaxed);
         }
@@ -251,7 +251,7 @@ bool HTMSkiplist::remove_seq(long key) {
     SKNode *updateArr[MAX_HEIGHT];
 
     // find where the node is
-    for (auto h = MAX_HEIGHT - 1; h >= 0; h--) {
+    for (int h = MAX_HEIGHT - 1; h >= 0; h--) {
         auto cmpKey = curr->next[h].load(memory_order_relaxed)->key;
         while (cmpKey < key) {
             curr = curr->next[h].load(memory_order_relaxed);
@@ -265,7 +265,7 @@ bool HTMSkiplist::remove_seq(long key) {
         auto nodeHeight = curr->height;
         // update fields
         curr->state = REMOVED;
-        for (auto h = 0; h < nodeHeight; h++) {
+        for (int h = 0; h < nodeHeight; h++) {
             updateArr[h]->next[h].store(
                 curr->next[h].load(memory_order_relaxed), memory_order_relaxed);
         }
