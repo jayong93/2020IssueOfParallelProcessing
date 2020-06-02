@@ -15,13 +15,13 @@ void benchMark(HTMSkiplist &skiplist, int num_thread) {
     for (int i = 1; i <= NUM_TEST / num_thread; ++i) {
         switch (fast_rand() % 3) {
         case 0:
-            skiplist.insert(fast_rand(), fast_rand());
+            skiplist.insert(fast_rand() % 1000, fast_rand());
             break;
         case 1:
-            skiplist.remove(fast_rand());
+            skiplist.remove(fast_rand() % 1000);
             break;
         default:
-            skiplist.find(fast_rand());
+            skiplist.find(fast_rand() % 1000);
             break;
         }
     }
