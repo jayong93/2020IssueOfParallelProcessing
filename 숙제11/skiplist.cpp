@@ -36,8 +36,6 @@ unique_lock<mutex> try_to_start_tx(mutex &lock, bool &is_force_aborted) {
                 is_force_aborted = true;
                 break;
             }
-        } else {
-            fprintf(stderr, "Unknown abort : %u\n", status);
         }
 
         try_count++;
