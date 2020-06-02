@@ -19,8 +19,7 @@ unique_lock<mutex> try_to_start_tx(mutex &lock, bool &is_force_aborted) {
         auto status = _xbegin();
         if (status == _XBEGIN_STARTED) {
             break;
-        }
-        else if ((status & 0x2) != 0) {
+        } else if ((status & 0x2) != 0) {
             fprintf(stderr, "Closed to success\n");
         } else if ((status & 0x4) != 0) {
             fprintf(stderr, "Conflict\n");
@@ -82,13 +81,13 @@ bool HTMSkiplist::remove(long key) {
 }
 
 optional<long> HTMSkiplist::find(long key) {
-    SKNode *curr, *prev;
+    volatile SKNode *curr, *prev;
     prev = this->head;
     for (int i = MAX_HEIGHT - 1; i >= 0; --i) {
-        curr = prev->next[i].load(memory_order_relaxed);
+        curr = prev->next[i];
         while (key > curr->key) {
             prev = curr;
-            curr = prev->next[i].load(memory_order_relaxed);
+            curr = prev->next[i];
         }
         if (key == curr->key)
             break;
@@ -104,27 +103,27 @@ optional<long> HTMSkiplist::find(long key) {
 }
 
 HTMResult HTMSkiplist::insert_htm(SKNode &node) {
-    SKNode *preds[MAX_HEIGHT];
-    SKNode *succs[MAX_HEIGHT];
-    SKNode *curr;
-    SKNode *pred;
+    volatile SKNode *preds[MAX_HEIGHT];
+    volatile SKNode *succs[MAX_HEIGHT];
+    volatile SKNode *curr;
+    volatile SKNode *pred;
 
     long key = node.key;
 
     pred = this->head;
     for (int h = MAX_HEIGHT - 1; h >= 0; h--) {
-        curr = pred->next[h].load(memory_order_relaxed);
+        curr = pred->next[h];
         while (key > curr->key) {
             pred = curr;
-            curr = pred->next[h].load(memory_order_relaxed);
+            curr = pred->next[h];
         }
         preds[h] = pred;
         succs[h] = curr;
     }
     if (key == curr->key) {
-        while (curr->state == INITIAL)
+        while (curr->state.load(memory_order_relaxed) == INITIAL)
             ;
-        if (curr->state == REMOVED)
+        if (curr->state.load(memory_order_relaxed) == REMOVED)
             return HTMResult::HTMAbort;
         return HTMResult::Fail; // if node exists , we return
     }
@@ -137,8 +136,9 @@ HTMResult HTMSkiplist::insert_htm(SKNode &node) {
     auto nodeHeight = node.height;
     // check consistency
     for (int h = 0; h < nodeHeight; h++) {
-        if (preds[h]->next[h].load(memory_order_relaxed) != succs[h] ||
-            preds[h]->state == REMOVED || succs[h]->state == REMOVED) {
+        if (preds[h]->next[h] != succs[h] ||
+            preds[h]->state.load(memory_order_relaxed) == REMOVED ||
+            succs[h]->state.load(memory_order_relaxed) == REMOVED) {
             // force an abort
             if (_xtest())
                 _xabort(0xaa);
@@ -150,11 +150,11 @@ HTMResult HTMSkiplist::insert_htm(SKNode &node) {
 
     // update fields
     for (int h = 0; h < nodeHeight; h++) {
-        node.next[h].store(succs[h], memory_order_relaxed);
+        node.next[h] = succs[h];
     }
 
     for (int h = 0; h < nodeHeight; h++) {
-        preds[h]->next[h].store(&node, memory_order_relaxed);
+        preds[h]->next[h] = &node;
     }
 
     node.state.store(INSERTED, memory_order_release);
@@ -167,27 +167,26 @@ HTMResult HTMSkiplist::insert_htm(SKNode &node) {
 bool HTMSkiplist::insert_seq(SKNode &node) {
     unique_lock<mutex> lg{this->lock};
 
-    SKNode *updateArr[MAX_HEIGHT];
-    SKNode *curr = this->head;
+    volatile SKNode *updateArr[MAX_HEIGHT];
+    volatile SKNode *curr = this->head;
     long key = node.key;
     unsigned nodeHeight = node.height;
 
     for (int h = MAX_HEIGHT - 1; h >= 0; h--) {
-        auto cmpKey = curr->next[h].load(memory_order_relaxed)->key;
+        auto cmpKey = curr->next[h]->key;
         while (cmpKey < key) {
-            curr = curr->next[h].load(memory_order_relaxed);
-            cmpKey = (curr->next[h].load(memory_order_relaxed))->key;
+            curr = curr->next[h];
+            cmpKey = (curr->next[h])->key;
         }
         updateArr[h] = curr;
     }
 
-    if (curr->next[0].load(memory_order_relaxed)->key == key)
+    if (curr->next[0]->key == key)
         return 0;
 
     for (int h = 0; h < nodeHeight; h++) {
-        node.next[h].store(updateArr[h]->next[h].load(memory_order_relaxed),
-                           memory_order_relaxed);
-        updateArr[h]->next[h].store(&node, memory_order_relaxed);
+        node.next[h] = updateArr[h]->next[h];
+        updateArr[h]->next[h] = &node;
     }
 
     node.state.store(INSERTED, memory_order_release);
@@ -195,17 +194,17 @@ bool HTMSkiplist::insert_seq(SKNode &node) {
 }
 
 HTMResult HTMSkiplist::remove_htm(long key) {
-    SKNode *preds[MAX_HEIGHT];
-    SKNode *curr;
-    SKNode *pred;
+    volatile SKNode *preds[MAX_HEIGHT];
+    volatile SKNode *curr;
+    volatile SKNode *pred;
 
     // find where the node is
     pred = this->head;
     for (int h = MAX_HEIGHT - 1; h >= 0; h--) {
-        curr = pred->next[h].load(memory_order_relaxed);
+        curr = pred->next[h];
         while (key > curr->key) {
             pred = curr;
-            curr = pred->next[h].load(memory_order_relaxed);
+            curr = pred->next[h];
         }
         preds[h] = pred;
     }
@@ -220,8 +219,8 @@ HTMResult HTMSkiplist::remove_htm(long key) {
         auto nodeHeight = curr->height;
         // check consistency
         for (int h = 0; h < nodeHeight; h++) {
-            if (preds[h]->next[h].load(memory_order_relaxed) != curr ||
-                preds[h]->state == REMOVED) {
+            if (preds[h]->next[h] != curr ||
+                preds[h]->state.load(memory_order_relaxed) == REMOVED) {
                 // force an abort
                 if (_xtest())
                     _xabort(0xaa);
@@ -234,8 +233,7 @@ HTMResult HTMSkiplist::remove_htm(long key) {
         // update fields
         curr->state.store(REMOVED, memory_order_relaxed);
         for (int h = 0; h < nodeHeight; h++) {
-            preds[h]->next[h].store(curr->next[h].load(memory_order_relaxed),
-                                    memory_order_relaxed);
+            preds[h]->next[h] = curr->next[h];
         }
 
         // commit
@@ -252,27 +250,26 @@ HTMResult HTMSkiplist::remove_htm(long key) {
 bool HTMSkiplist::remove_seq(long key) {
     unique_lock<mutex> lg{this->lock};
 
-    SKNode *curr = this->head;
-    SKNode *updateArr[MAX_HEIGHT];
+    volatile SKNode *curr = this->head;
+    volatile SKNode *updateArr[MAX_HEIGHT];
 
     // find where the node is
     for (int h = MAX_HEIGHT - 1; h >= 0; h--) {
-        auto cmpKey = curr->next[h].load(memory_order_relaxed)->key;
+        auto cmpKey = curr->next[h]->key;
         while (cmpKey < key) {
-            curr = curr->next[h].load(memory_order_relaxed);
-            cmpKey = (curr->next[h].load(memory_order_relaxed))->key;
+            curr = curr->next[h];
+            cmpKey = (curr->next[h])->key;
         }
         updateArr[h] = curr;
     }
 
-    curr = curr->next[0].load(memory_order_relaxed);
+    curr = curr->next[0];
     if (curr->key == key) {
         auto nodeHeight = curr->height;
         // update fields
-        curr->state = REMOVED;
+        curr->state.store(REMOVED, memory_order_relaxed);
         for (int h = 0; h < nodeHeight; h++) {
-            updateArr[h]->next[h].store(
-                curr->next[h].load(memory_order_relaxed), memory_order_relaxed);
+            updateArr[h]->next[h] = curr->next[h];
         }
         return true;
     } else {

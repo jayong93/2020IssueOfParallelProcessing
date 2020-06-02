@@ -1,12 +1,12 @@
 #ifndef BF25D0C7_93DA_4876_83E5_19532232222B
 #define BF25D0C7_93DA_4876_83E5_19532232222B
 
+#include "util.h"
 #include <array>
 #include <atomic>
 #include <climits>
-#include <optional>
 #include <mutex>
-#include "util.h"
+#include <optional>
 
 using std::optional;
 
@@ -18,12 +18,15 @@ struct SKNode {
     long key, value;
     unsigned height;
     std::atomic<SKNodeState> state;
-    std::array<std::atomic<SKNode *>, MAX_HEIGHT> next;
+    volatile SKNode *next[MAX_HEIGHT];
 
     SKNode(long key, long value)
         : SKNode{key, value, (unsigned)fast_rand() % MAX_HEIGHT + 1} {}
     SKNode(long key, long value, unsigned height)
-        : next{}, state{INITIAL}, height{height}, key{key}, value{value} {}
+        : next{}, state{INITIAL}, height{height}, key{key}, value{value} {
+        for (auto i = 0; i < MAX_HEIGHT; ++i)
+            next[i] = nullptr;
+    }
 };
 
 enum HTMResult { Success, Fail, HTMAbort };
@@ -34,7 +37,7 @@ class HTMSkiplist {
         : head{new SKNode{LONG_MIN, LONG_MIN, MAX_HEIGHT}},
           tail{new SKNode{LONG_MAX, LONG_MAX, MAX_HEIGHT}} {
         for (auto i = 0; i < MAX_HEIGHT; ++i)
-            head->next[i].store(tail, std::memory_order_relaxed);
+            head->next[i] = tail;
     }
     ~HTMSkiplist() {
         delete head;
