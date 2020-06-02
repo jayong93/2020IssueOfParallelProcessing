@@ -20,17 +20,17 @@ unique_lock<mutex> try_to_start_tx(mutex &lock, bool &is_force_aborted) {
         if (status == _XBEGIN_STARTED) {
             break;
         }
-        else if (status & 0x2 != 0) {
+        else if ((status & 0x2) != 0) {
             fprintf(stderr, "Closed to success\n");
-        } else if (status & 0x4 != 0) {
+        } else if ((status & 0x4) != 0) {
             fprintf(stderr, "Conflict\n");
-        } else if (status & 0x8 != 0) {
+        } else if ((status & 0x8) != 0) {
             fprintf(stderr, "Capacity\n");
-        } else if (status & 0x10 != 0) {
+        } else if ((status & 0x10) != 0) {
             fprintf(stderr, "Debug Assertion\n");
-        } else if (status & 0x20 != 0) {
+        } else if ((status & 0x20) != 0) {
             fprintf(stderr, "Nested Transaction\n");
-        } else if (status & 0x1 != 0) {
+        } else if ((status & 0x1) != 0) {
             fprintf(stderr, "Aborted\n");
             if (_XABORT_CODE(status) == 0xaa) {
                 fprintf(stderr, "=> Force Aborted\n");
@@ -38,7 +38,7 @@ unique_lock<mutex> try_to_start_tx(mutex &lock, bool &is_force_aborted) {
                 break;
             }
         } else {
-            fprintf(stderr, "Unknown abort : %d\n", status);
+            fprintf(stderr, "Unknown abort : %u\n", status);
         }
 
         try_count++;
