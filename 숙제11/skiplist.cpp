@@ -7,6 +7,47 @@ using namespace std;
 constexpr unsigned MAX_TRY = 15;
 constexpr unsigned MAX_TX_TRY = 30;
 
+unique_lock<mutex> try_to_start_tx(mutex &lock, bool &is_force_aborted) {
+    unique_lock<mutex> lg;
+    auto try_count = 0;
+    while (true) {
+        if (try_count >= MAX_TX_TRY) {
+            lg = unique_lock{lock};
+            break;
+        }
+
+        auto status = _xbegin();
+        if (status == _XBEGIN_STARTED) {
+            lg = unique_lock{lock, try_to_lock};
+            if (!lg)
+                _xabort(0xaa);
+            lg.unlock();
+            break;
+        }
+        else if (status & 0x2 == 1) {
+            fprintf(stderr, "Closed to success\n");
+        } else if (status & 0x4 == 1) {
+            fprintf(stderr, "Conflict\n");
+        } else if (status & 0x8 == 1) {
+            fprintf(stderr, "Capacity\n");
+        } else if (status & 0x10 == 1) {
+            fprintf(stderr, "Debug Assertion\n");
+        } else if (status & 0x20 == 1) {
+            fprintf(stderr, "Nested Transaction\n");
+        } else if (status & 0x1 == 1) {
+            fprintf(stderr, "Aborted\n");
+            if (_XABORT_CODE(status) == 0xaa) {
+                fprintf(stderr, "=> Force Aborted\n");
+                is_force_aborted = true;
+                break;
+            }
+        }
+
+        try_count++;
+    }
+    return lg;
+}
+
 bool HTMSkiplist::insert(long key, long value) {
     SKNode *node = new SKNode{key, value};
     for (int i = 0; i < MAX_TRY; ++i) {
@@ -90,29 +131,10 @@ HTMResult HTMSkiplist::insert_htm(SKNode &node) {
         return HTMResult::Fail; // if node exists , we return
     }
 
-    unique_lock<mutex> lg;
-    auto try_count = 0;
-    while (true) {
-        if (try_count >= MAX_TX_TRY) {
-            lg = unique_lock{this->lock};
-            break;
-        }
-
-        auto status = _xbegin();
-        if (status == _XBEGIN_STARTED) {
-            lg = unique_lock{this->lock, try_to_lock};
-            if (!lg)
-                _xabort(0xaa);
-            lg.unlock();
-            break;
-        }
-        if (status & 0x1 == 1 && _XABORT_CODE(status) == 0xaa) {
-            fprintf(stderr, "Force Aborted\n");
-            return HTMResult::HTMAbort;
-        }
-
-        try_count++;
-    }
+    bool is_force_aborted = false;
+    unique_lock<mutex> lg = try_to_start_tx(this->lock, is_force_aborted);
+    if (is_force_aborted)
+        return HTMResult::HTMAbort;
 
     auto nodeHeight = node.height;
     // check consistency
@@ -190,29 +212,10 @@ HTMResult HTMSkiplist::remove_htm(long key) {
         preds[h] = pred;
     }
 
-    unique_lock<mutex> lg;
-    auto try_count = 0;
-    while (true) {
-        if (try_count >= MAX_TX_TRY) {
-            lg = unique_lock{this->lock};
-            break;
-        }
-
-        auto status = _xbegin();
-        if (status == _XBEGIN_STARTED) {
-            lg = unique_lock{this->lock, try_to_lock};
-            if (!lg)
-                _xabort(0xaa);
-            lg.unlock();
-            break;
-        }
-        if (status & 0x1 == 1 && _XABORT_CODE(status) == 0xaa) {
-            fprintf(stderr, "Force Aborted\n");
-            return HTMResult::HTMAbort;
-        }
-
-        try_count++;
-    }
+    bool is_force_aborted = false;
+    unique_lock<mutex> lg = try_to_start_tx(this->lock, is_force_aborted);
+    if (is_force_aborted)
+        return HTMResult::HTMAbort;
 
     // begin transaction
     if (curr->key == key) {
