@@ -19,6 +19,7 @@ public:
 	void store(shared_ptr<T> sptr, memory_order = memory_order_seq_cst) noexcept
 	{
 		while (_XBEGIN_STARTED != _xbegin());
+		shared_ptr<T> t = move(m_ptr);
 		m_ptr = sptr;
 		_xend();
 	}
@@ -49,7 +50,7 @@ public:
 		return t;
 	}
 
-	bool compare_exchange_strong(shared_ptr<T>& expected_sptr, shared_ptr<T> new_sptr, memory_order, memory_order) noexcept
+	bool compare_exchange_strong(shared_ptr<T>& expected_sptr, shared_ptr<T> new_sptr, memory_order order_read = memory_order_seq_cst, memory_order order_write = memory_order_seq_cst) noexcept
 	{
 		bool success = false;
 		while (_XBEGIN_STARTED != _xbegin());
@@ -62,33 +63,49 @@ public:
 		_xend();
 	}
 
-	bool compare_exchange_weak(shared_ptr<T>& expected_sptr, shared_ptr<T> target_sptr, memory_order, memory_order) noexcept
+	bool compare_exchange_weak(shared_ptr<T>& expected_sptr, shared_ptr<T> target_sptr, memory_order order_read, memory_order order_write) noexcept
 	{
-		return compare_exchange_strong(expected_sptr, target_sptr, memory_order);
+		return compare_exchange_strong(expected_sptr, target_sptr);
 	}
 
 	htm_shared_ptr() noexcept = default;
 
-	constexpr htm_shared_ptr(shared_ptr<T> sptr) noexcept
+	constexpr htm_shared_ptr(const shared_ptr<T> &sptr) noexcept
 	{
 		while (_XBEGIN_STARTED != _xbegin());
 		m_ptr = sptr;
 		_xend();
 	}
-	//		htm_shared_ptr(const htm_shared_ptr&) = delete;
-	//		htm_shared_ptr& operator=(const htm_shared_ptr&) = delete;
-	shared_ptr<T> operator=(shared_ptr<T> sptr) noexcept
+	constexpr htm_shared_ptr(shared_ptr<T> &&sptr) noexcept
 	{
 		while (_XBEGIN_STARTED != _xbegin());
+		m_ptr = move(sptr);
+		_xend();
+	}
+	//		htm_shared_ptr(const htm_shared_ptr&) = delete;
+	//		htm_shared_ptr& operator=(const htm_shared_ptr&) = delete;
+	htm_shared_ptr<T>& operator=(const shared_ptr<T> &sptr) noexcept
+	{
+		while (_XBEGIN_STARTED != _xbegin());
+		shared_ptr<T> t = move(m_ptr);
 		m_ptr = sptr;
 		_xend();
-		return sptr;
+		return *this;
+	}
+
+	htm_shared_ptr<T>& operator=(shared_ptr<T> &&sptr) noexcept
+	{
+		while (_XBEGIN_STARTED != _xbegin());
+		shared_ptr<T> t = move(m_ptr);
+		m_ptr = move(sptr);
+		_xend();
+		return *this;
 	}
 
 	void reset()
 	{
 		while (_XBEGIN_STARTED != _xbegin());
-		m_ptr = nullptr;
+		shared_ptr<T> t = move(m_ptr);
 		_xend();
 	}
 	T* operator ->()
