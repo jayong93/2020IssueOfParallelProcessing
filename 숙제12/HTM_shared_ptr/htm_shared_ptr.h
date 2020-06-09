@@ -16,7 +16,7 @@ public:
 		return false;
 	}
 
-	void store(shared_ptr<T> &sptr, memory_order = memory_order_seq_cst) noexcept
+	void store(const shared_ptr<T> &sptr, memory_order = memory_order_seq_cst) noexcept
 	{
 		while (_XBEGIN_STARTED != _xbegin());
 		shared_ptr<T> t = move(m_ptr);
@@ -41,7 +41,7 @@ public:
 		return t;
 	}
 
-	shared_ptr<T> exchange(shared_ptr<T> &sptr, memory_order = memory_order_seq_cst) noexcept
+	shared_ptr<T> exchange(const shared_ptr<T> &sptr, memory_order = memory_order_seq_cst) noexcept
 	{
 		while (_XBEGIN_STARTED != _xbegin());
 		shared_ptr<T> t = move(m_ptr);
@@ -61,6 +61,8 @@ public:
 		}
 		expected_sptr = m_ptr;
 		_xend();
+
+		return success;
 	}
 
 	bool compare_exchange_weak(shared_ptr<T>& expected_sptr, shared_ptr<T> target_sptr, memory_order = memory_order_seq_cst, memory_order = memory_order_seq_cst) noexcept
@@ -172,10 +174,10 @@ public:
 		return t;
 	}
 
-	bool compare_exchange_strong(weak_ptr<T>& expected_wptr, weak_ptr<T> new_wptr, memory_order, memory_order) noexcept
+	bool compare_exchange_strong(weak_ptr<T>& expected_wptr, weak_ptr<T> new_wptr, memory_order = memory_order_seq_cst, memory_order = memory_order_seq_cst) noexcept
 	{
 		bool success = false;
-		lock_guard(m_lock);
+		lock_guard<mutex> lg{m_lock};
 
 		weak_ptr<T> t = m_ptr;
 		shared_ptr<T> my_ptr = t.lock();
@@ -191,9 +193,9 @@ public:
 		return success;
 	}
 
-	bool compare_exchange_weak(weak_ptr<T>& exptected_wptr, weak_ptr<T> new_wptr, memory_order, memory_order) noexcept
+	bool compare_exchange_weak(weak_ptr<T>& exptected_wptr, weak_ptr<T> new_wptr, memory_order = memory_order_seq_cst, memory_order = memory_order_seq_cst) noexcept
 	{
-		return compare_exchange_strong(exptected_wptr, new_wptr, memory_order);
+		return compare_exchange_strong(exptected_wptr, new_wptr);
 	}
 
 	atomic_weak_ptr() noexcept = default;
