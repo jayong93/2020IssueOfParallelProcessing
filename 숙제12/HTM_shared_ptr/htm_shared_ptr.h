@@ -16,7 +16,7 @@ public:
 		return false;
 	}
 
-	void store(shared_ptr<T> sptr, memory_order = memory_order_seq_cst) noexcept
+	void store(shared_ptr<T> &sptr, memory_order = memory_order_seq_cst) noexcept
 	{
 		while (_XBEGIN_STARTED != _xbegin());
 		shared_ptr<T> t = move(m_ptr);
@@ -41,16 +41,16 @@ public:
 		return t;
 	}
 
-	shared_ptr<T> exchange(shared_ptr<T> sptr, memory_order = memory_order_seq_cst) noexcept
+	shared_ptr<T> exchange(shared_ptr<T> &sptr, memory_order = memory_order_seq_cst) noexcept
 	{
 		while (_XBEGIN_STARTED != _xbegin());
-		shared_ptr<T> t = m_ptr;
+		shared_ptr<T> t = move(m_ptr);
 		m_ptr = sptr;
 		_xend();
 		return t;
 	}
 
-	bool compare_exchange_strong(shared_ptr<T>& expected_sptr, shared_ptr<T> new_sptr, memory_order order_read = memory_order_seq_cst, memory_order order_write = memory_order_seq_cst) noexcept
+	bool compare_exchange_strong(shared_ptr<T>& expected_sptr, shared_ptr<T> new_sptr, memory_order = memory_order_seq_cst, memory_order = memory_order_seq_cst) noexcept
 	{
 		bool success = false;
 		while (_XBEGIN_STARTED != _xbegin());
@@ -63,7 +63,7 @@ public:
 		_xend();
 	}
 
-	bool compare_exchange_weak(shared_ptr<T>& expected_sptr, shared_ptr<T> target_sptr, memory_order order_read, memory_order order_write) noexcept
+	bool compare_exchange_weak(shared_ptr<T>& expected_sptr, shared_ptr<T> target_sptr, memory_order = memory_order_seq_cst, memory_order = memory_order_seq_cst) noexcept
 	{
 		return compare_exchange_strong(expected_sptr, target_sptr);
 	}
