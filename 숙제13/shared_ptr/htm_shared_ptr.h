@@ -5,6 +5,43 @@
 
 using namespace std;
 
+struct TX_Log {
+    unsigned abort_conflict{0};
+    unsigned abort_capacity{0};
+    unsigned abort_explicit{0};
+    unsigned abort_other{0};
+    unsigned success{0};
+};
+
+static thread_local TX_Log tx_log;
+
+int tx_start()
+{
+	int status = 0;
+	
+    status = _xbegin();
+    if (_XBEGIN_STARTED == (unsigned)status) {
+        return status;
+    }
+    if (status & _XABORT_CAPACITY) {
+        ++tx_log.abort_capacity;
+	} else if (status & _XABORT_CONFLICT) {
+        ++tx_log.abort_conflict;
+    } else if (status & _XABORT_EXPLICIT) {
+        ++tx_log.abort_explicit;
+	} else {
+        ++tx_log.abort_other;
+	}
+
+    return status;
+}
+
+void tx_end() {
+    _xend();
+    ++tx_log.success;
+}
+
+
 template <class T>
 class ctr_block {
 public:
@@ -33,7 +70,7 @@ public:
 		bool need_delete = false;
 		T* temp_ptr = nullptr;
 		ctr_block<T>* temp_b_ptr = nullptr;
-		while (_XBEGIN_STARTED != _xbegin());
+		while (_XBEGIN_STARTED != tx_start());
 		if (nullptr != m_b_ptr) {
 			if (m_b_ptr->ref_count == 1) {
 				need_delete = true;
@@ -47,7 +84,7 @@ public:
 		}
 		m_ptr = sptr->m_ptr;
 		m_b_ptr = sptr->m_b_ptr;
-		_xend();
+		tx_end();
 		if (true == need_delete) {
 			delete temp_ptr;
 			delete temp_b_ptr;
@@ -56,22 +93,22 @@ public:
 
 	htm_shared_ptr<T> load(memory_order = memory_order_seq_cst) const noexcept
 	{
-		while (_XBEGIN_STARTED != _xbegin());
+		while (_XBEGIN_STARTED != tx_start());
 		htm_shared_ptr<T> t{ *this };
-		_xend();
+		tx_end();
 		return t;
 	}
 
 	htm_shared_ptr<T>& exchange(htm_shared_ptr<T> &sptr, memory_order = memory_order_seq_cst) noexcept
 	{
-		while (_XBEGIN_STARTED != _xbegin());
+		while (_XBEGIN_STARTED != tx_start());
 		ctr_block<T>* t_b = m_b_ptr;
 		T* t_p = m_ptr;
 		m_b_ptr = sptr.m_b_ptr;
 		m_ptr = sptr.m_ptr;
         sptr.m_ptr = t_p;
 		sptr.m_b_ptr = t_b;
-		_xend();
+		tx_end();
 		return sptr;
 	}
 
@@ -81,7 +118,7 @@ public:
 		bool need_delete = false;
 		T* temp_ptr;
 		ctr_block<T>* temp_b_ptr;
-		while (_XBEGIN_STARTED != _xbegin());
+		while (_XBEGIN_STARTED != tx_start());
 		if (m_b_ptr == expected_sptr.m_b_ptr) {
 			if (nullptr != m_b_ptr) {
 				if (m_b_ptr->ref_count == 1) {
@@ -98,7 +135,7 @@ public:
 			success = true;
 		}
 		expected_sptr = m_ptr;
-		_xend();
+		tx_end();
 		if (true == need_delete) {
 			delete temp_ptr;
 			delete temp_b_ptr;
@@ -122,7 +159,7 @@ public:
 		bool need_delete = false;
 		T *temp_ptr = nullptr;
 		ctr_block<T> *temp_b_ptr = nullptr;
-		while (_XBEGIN_STARTED != _xbegin());
+		while (_XBEGIN_STARTED != tx_start());
 		if (nullptr != m_b_ptr) {
 			if (m_b_ptr->ref_cnt == 1) {
 				need_delete = true;
@@ -131,7 +168,7 @@ public:
 			}
 			m_b_ptr->ref_cnt--;
 		}
-		_xend();
+		tx_end();
 		if (true == need_delete) {
 			delete temp_ptr;
 			delete temp_b_ptr;
@@ -140,12 +177,12 @@ public:
 
 	constexpr htm_shared_ptr(const htm_shared_ptr<T>& sptr) noexcept
 	{
-		while(_XBEGIN_STARTED != _xbegin());
+		while(_XBEGIN_STARTED != tx_start());
 		m_ptr = sptr.m_ptr;
 		m_b_ptr = sptr.m_b_ptr;
 		if (nullptr != m_b_ptr) 
 			m_b_ptr->ref_cnt++;
-		_xend();
+		tx_end();
 	}
 	htm_shared_ptr<T>& operator=(const htm_shared_ptr<T>& sptr) noexcept
 	{
@@ -153,7 +190,7 @@ public:
 		T* temp_ptr;
 		ctr_block<T>* temp_b_ptr;
 		do {
-			int t = _xbegin();
+			int t = tx_start();
 			if (_XBEGIN_STARTED == t) break;
 			if (99 == t) {
 				m_ptr = nullptr;
@@ -175,7 +212,7 @@ public:
 		m_b_ptr = sptr.m_b_ptr;
         if (nullptr != m_b_ptr)
             m_b_ptr->ref_cnt++;
-		_xend();
+		tx_end();
 		if (true == need_delete) {
 			delete temp_ptr;
 			delete temp_b_ptr;
@@ -193,10 +230,10 @@ public:
 	T operator*() noexcept
 	{
 		T temp_ptr;
-		while (_XBEGIN_STARTED != _xbegin());
+		while (_XBEGIN_STARTED != tx_start());
 		if (0 < m_b_ptr->ref_cnt)
 			temp_ptr = *m_ptr;
-		_xend();
+		tx_end();
 		return temp_ptr;
 	}
 
@@ -205,7 +242,7 @@ public:
 		bool need_delete = false;
 		T* temp_ptr;
 		ctr_block<T>* temp_b_ptr;
-		while (_XBEGIN_STARTED != _xbegin());
+		while (_XBEGIN_STARTED != tx_start());
 		if (nullptr != m_b_ptr) {
 			if (m_b_ptr->ref_cnt == 1) {
 				need_delete = true;
@@ -216,7 +253,7 @@ public:
 		}
 		m_ptr = nullptr;
 		m_b_ptr = nullptr;
-		_xend();
+		tx_end();
 		if (true == need_delete) {
 			delete temp_ptr;
 			delete temp_b_ptr;
@@ -226,11 +263,11 @@ public:
 	{
 		T* p = nullptr;
 		bool exception = false;
-		while (_XBEGIN_STARTED != _xbegin());
+		while (_XBEGIN_STARTED != tx_start());
 		if (nullptr == m_b_ptr) exception = true;
 		else if (m_b_ptr->ref_cnt < 1) exception = true;
 		else p = m_ptr;
-		_xend();
+		tx_end();
 		if (true == exception) {
 			int* a = nullptr;
 			*a = 1;

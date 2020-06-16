@@ -330,6 +330,11 @@ public:
 
 SPZLIST list;
 
+atomic_uint abort_capacity{0};
+atomic_uint abort_conflict{0};
+atomic_uint abort_explicit{0};
+atomic_uint abort_other{0};
+atomic_uint tx_success{0};
 
 void ThreadFunc(int num_thread)
 {
@@ -349,12 +354,23 @@ void ThreadFunc(int num_thread)
 			exit(-1);
 		}
 	}
+    abort_capacity.fetch_add(tx_log.abort_capacity, memory_order_relaxed);
+    abort_conflict.fetch_add(tx_log.abort_conflict, memory_order_relaxed);
+    abort_explicit.fetch_add(tx_log.abort_explicit, memory_order_relaxed);
+    abort_other.fetch_add(tx_log.abort_other, memory_order_relaxed);
+    tx_success.fetch_add(tx_log.success, memory_order_relaxed);
 }
 
 int main()
 {
 	for (auto n = 1; n <= 16; n *= 2) {
 		list.Init();
+        abort_other = 0;
+        abort_conflict = 0;
+        abort_capacity = 0;
+        abort_explicit = 0;
+        tx_success = 0;
+
 		vector <thread> threads;
 		auto s = high_resolution_clock::now();
 		for (int i = 0; i < n; ++i)
@@ -365,5 +381,12 @@ int main()
 		//list.recycle_freelist();
 		cout << n << "Threads,  ";
 		cout << ",  Duration : " << duration_cast<milliseconds>(d).count() << " msecs.\n";
+
+        cerr << "total abort: " << abort_capacity.load() + abort_conflict.load() + abort_explicit.load() + abort_other.load() << endl;
+        cerr << "    capacity: " << abort_capacity << endl;
+        cerr << "    conflict: " << abort_conflict << endl;
+        cerr << "    explicit: " << abort_explicit << endl;
+        cerr << "    other: " << abort_other << endl;
+        cerr << "total commit: " << tx_success << endl;
 	}
 }
