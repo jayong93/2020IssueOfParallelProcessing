@@ -17,8 +17,8 @@ template <class T>
 class htm_shared_ptr {
 
 private:
-	template <class T, class..._Types>
-	friend htm_shared_ptr<T> make_htm_shared(_Types&&... _Args);
+	template <class F, class..._Types>
+	friend htm_shared_ptr<F> make_htm_shared(_Types&&... _Args);
 
 	ctr_block<T>	*m_b_ptr;
 	T* m_ptr;
@@ -31,8 +31,8 @@ public:
 	void store(const htm_shared_ptr<T>& sptr, memory_order = memory_order_seq_cst) noexcept
 	{
 		bool need_delete = false;
-		temp_ptr = nullptr;
-		temp_b_ptr = nullptr;
+		T* temp_ptr = nullptr;
+		ctr_block<T>* temp_b_ptr = nullptr;
 		while (_XBEGIN_STARTED != _xbegin());
 		if (nullptr != m_b_ptr) {
 			if (m_b_ptr->ref_count == 1) {
@@ -43,7 +43,7 @@ public:
 			m_b_ptr->ref_count--;
 		}
 		if (nullptr != sptr.m_ptr) {
-			sptr.m_ptr->ref_count++:
+			sptr.m_ptr->ref_count++;
 		}
 		m_ptr = sptr->m_ptr;
 		m_b_ptr = sptr->m_b_ptr;
@@ -65,7 +65,7 @@ public:
 	htm_shared_ptr<T>& exchange(htm_shared_ptr<T> &sptr, memory_order = memory_order_seq_cst) noexcept
 	{
 		while (_XBEGIN_STARTED != _xbegin());
-		ctr_block* t_b = m_b_ptr;
+		ctr_block<T>* t_b = m_b_ptr;
 		T* t_p = m_ptr;
 		m_b_ptr = sptr.m_b_ptr;
 		m_ptr = sptr.m_ptr;
@@ -75,7 +75,7 @@ public:
 		return sptr;
 	}
 
-	bool compare_exchange_strong(htm_shared_ptr<T>& expected_sptr, const htm_shared_ptr<T>& new_sptr, memory_order, memory_order) noexcept
+	bool compare_exchange_strong(htm_shared_ptr<T>& expected_sptr, const htm_shared_ptr<T>& new_sptr, memory_order = memory_order_seq_cst, memory_order = memory_order_seq_cst) noexcept
 	{
 		bool success = false;
 		bool need_delete = false;
@@ -89,7 +89,7 @@ public:
 					temp_ptr = m_ptr;
 					temp_b_ptr = m_b_ptr;
 				}
-				else if (m_b_ptr->ref_count < 1) _xabort();  // Fall Back Routine 추가 필요
+				else if (m_b_ptr->ref_count < 1) _xabort(99);  // Fall Back Routine 추가 필요
 				m_b_ptr->ref_cnt--;
 			}
 			m_ptr = new_sptr.m_ptr;
@@ -106,9 +106,9 @@ public:
 		return success;
 	}
 
-	bool compare_exchange_weak(shared_ptr<T>& expected_sptr, const shared_ptr<T>& target_sptr, memory_order, memory_order) noexcept
+	bool compare_exchange_weak(shared_ptr<T>& expected_sptr, const shared_ptr<T>& target_sptr, memory_order = memory_order_seq_cst, memory_order = memory_order_seq_cst) noexcept
 	{
-		return compare_exchange_strong(expected_sptr, target_sptr, memory_order);
+		return compare_exchange_strong(expected_sptr, target_sptr);
 	}
 
 	htm_shared_ptr() noexcept
