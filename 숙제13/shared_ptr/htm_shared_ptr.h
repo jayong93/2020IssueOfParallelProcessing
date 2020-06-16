@@ -28,7 +28,7 @@ public:
 		return true;
 	}
 
-	void store(htm_shared_ptr<T> sptr, memory_order = memory_order_seq_cst) noexcept
+	void store(const htm_shared_ptr<T>& sptr, memory_order = memory_order_seq_cst) noexcept
 	{
 		bool need_delete = false;
 		temp_ptr = nullptr;
@@ -62,37 +62,27 @@ public:
 		return t;
 	}
 
-	operator htm_shared_ptr<T>() const noexcept
-	{
-		while (_XBEGIN_STARTED != _xbegin());
-		htm_shared_ptr<T> t {*this};
-		_xend();
-		return t;
-	}
-
-	htm_shared_ptr<T> exchange(htm_shared_ptr<T> &sptr, memory_order = memory_order_seq_cst) noexcept
+	htm_shared_ptr<T>& exchange(htm_shared_ptr<T> &sptr, memory_order = memory_order_seq_cst) noexcept
 	{
 		while (_XBEGIN_STARTED != _xbegin());
 		ctr_block* t_b = m_b_ptr;
 		T* t_p = m_ptr;
 		m_b_ptr = sptr.m_b_ptr;
 		m_ptr = sptr.m_ptr;
-		sptr.m_b_ptr = t_p;
-		m_ptr = sptr.m_ptr;
-		m_b_ptr = sptr.m_b_ptr;
+        sptr.m_ptr = t_p;
+		sptr.m_b_ptr = t_b;
 		_xend();
 		return sptr;
 	}
 
-	bool compare_exchange_strong(htm_shared_ptr<T>& expected_sptr, htm_shared_ptr<T> new_sptr, memory_order, memory_order) noexcept
+	bool compare_exchange_strong(htm_shared_ptr<T>& expected_sptr, const htm_shared_ptr<T>& new_sptr, memory_order, memory_order) noexcept
 	{
 		bool success = false;
 		bool need_delete = false;
 		T* temp_ptr;
 		ctr_block<T>* temp_b_ptr;
 		while (_XBEGIN_STARTED != _xbegin());
-		shared_ptr<T> t = m_ptr;
-		if (m_pt.m_b_ptr == expected_sptr.m_b_ptr) {
+		if (m_b_ptr == expected_sptr.m_b_ptr) {
 			if (nullptr != m_b_ptr) {
 				if (m_b_ptr->ref_count == 1) {
 					need_delete = true;
@@ -116,7 +106,7 @@ public:
 		return success;
 	}
 
-	bool compare_exchange_weak(shared_ptr<T>& expected_sptr, shared_ptr<T> target_sptr, memory_order, memory_order) noexcept
+	bool compare_exchange_weak(shared_ptr<T>& expected_sptr, const shared_ptr<T>& target_sptr, memory_order, memory_order) noexcept
 	{
 		return compare_exchange_strong(expected_sptr, target_sptr, memory_order);
 	}
@@ -148,7 +138,7 @@ public:
 		}
 	}
 
-	constexpr htm_shared_ptr(htm_shared_ptr<T>& sptr) noexcept
+	constexpr htm_shared_ptr(const htm_shared_ptr<T>& sptr) noexcept
 	{
 		while(_XBEGIN_STARTED != _xbegin());
 		m_ptr = sptr.m_ptr;
@@ -157,9 +147,7 @@ public:
 			m_b_ptr->ref_cnt++;
 		_xend();
 	}
-	//		htm_shared_ptr(const htm_shared_ptr&) = delete;
-	//		htm_shared_ptr& operator=(const htm_shared_ptr&) = delete;
-	htm_shared_ptr<T> operator=(htm_shared_ptr<T> sptr) noexcept
+	htm_shared_ptr<T>& operator=(const htm_shared_ptr<T>& sptr) noexcept
 	{
 		bool need_delete = false;
 		T* temp_ptr;
@@ -185,7 +173,8 @@ public:
 		}
 		m_ptr = sptr.m_ptr;
 		m_b_ptr = sptr.m_b_ptr;
-		m_b_ptr->ref_cnt++;
+        if (nullptr != m_b_ptr)
+            m_b_ptr->ref_cnt++;
 		_xend();
 		if (true == need_delete) {
 			delete temp_ptr;
@@ -194,7 +183,7 @@ public:
 		return *this;
 	}
 
-	htm_shared_ptr<T> operator=(nullptr_t t) noexcept
+	htm_shared_ptr<T>& operator=(nullptr_t t) noexcept
 	{
 		reset();
 		return *this;
@@ -223,7 +212,6 @@ public:
 				temp_ptr = m_ptr;
 				temp_b_ptr = m_b_ptr;
 			}
-			// else if (m_b_ptr->ref_cnt < 1) _xabort();
 			m_b_ptr->ref_cnt--;
 		}
 		m_ptr = nullptr;
@@ -250,16 +238,6 @@ public:
 		return p;
 	}
 
-
-	//htm_shared_ptr(const htm_shared_ptr& rhs)
-	//{
-	//	store(rhs);
-	//}
-	//htm_shared_ptr& operator=(const htm_shared_ptr& rhs)
-	//{
-	//	store(rhs);
-	//	return *this;
-	//}
 	template< typename TargetType >
 	inline bool operator ==(htm_shared_ptr< TargetType > const& rhs)
 	{
