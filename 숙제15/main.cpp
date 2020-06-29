@@ -588,6 +588,10 @@ public:
 	{
 		ROApply(Invocation{M_Print20, 0});
 	}
+
+	void pin_thread() {
+		numa_run_on_node(local_numa_id);
+	}
 };
 
 atomic_uint LFUniversal::tid_counter{0};
@@ -607,7 +611,7 @@ mutex gl;
 void ThreadFunc(int num_thread, int tid)
 {
 	thread_id = tid;
-
+	g_list.pin_thread();
 	for (int i = 0; i < NUM_TEST / num_thread; ++i)
 	{
 		Invocation invoc;
